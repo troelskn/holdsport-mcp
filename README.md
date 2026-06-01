@@ -39,17 +39,15 @@ Team-scoped commands default to `HOLDSPORT_TEAM_ID`; override per call with `--t
 
 ## MCP server
 
-Unlike the CLI, the MCP server takes credentials as **command-line flags** (so the host config can supply them) and is **read-only** — it exposes only the read tools plus a GET-only `get` escape hatch. There is no arbitrary-request tool, so an agent driving it can never modify Holdsport data.
+The MCP server is **read-only** — it exposes only the read tools plus a GET-only `get` escape hatch. There is no arbitrary-request tool, so an agent driving it can never modify Holdsport data.
+
+Credentials are passed on **every tool call**: each tool takes `username` and `password` arguments (plus optional `team_id` and `base_url`), and a fresh client is built per call. The server itself takes no arguments and holds no credentials — the MCP host supplies them with each invocation.
 
 ```sh
-bun bin/holdsport-mcp --username you@example.com --password secret --team-id 37141
+bun bin/holdsport-mcp
 ```
 
-Flags: `--username`, `--password`, `--team-id`, `--base-url` (each falls back to the matching `HOLDSPORT_*` env var if omitted). Missing credentials are a start-up error.
-
 ### Register with Claude Cowork
-
-Add to your MCP config, passing credentials as args:
 
 ```json
 {
@@ -57,16 +55,15 @@ Add to your MCP config, passing credentials as args:
     "holdsport": {
       "command": "bun",
       "args": [
-        "/Users/troelskn/Projects/claude-holdsport-mcp-server/bin/holdsport-mcp",
-        "--username", "you@example.com",
-        "--password", "your-password",
-        "--team-id", "37141"
+        "/Users/troelskn/Projects/claude-holdsport-mcp-server/bin/holdsport-mcp"
       ]
     }
   }
 }
 ```
 
+The host (or the model) provides `username`/`password` with each tool call.
+
 ### Tools
 
-`teams`, `members`, `member`, `roster`, `notes`, `activities`, `activity`, `attendees`, `headcount`, `tasks`, `user`, `profiles`, and `get` (raw GET). Team-scoped tools accept an optional `team_id` to override the configured default.
+`teams`, `members`, `member`, `roster`, `notes`, `activities`, `activity`, `attendees`, `headcount`, `tasks`, `user`, `profiles`, and `get` (raw GET). Every tool requires `username` and `password`; team-scoped tools also need a `team_id`.

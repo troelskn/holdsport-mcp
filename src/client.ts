@@ -11,7 +11,7 @@
  * API docs: https://github.com/Holdsport/holdsport-api
  */
 
-const DEFAULT_BASE_URL = "https://api.holdsport.dk/v1";
+export const DEFAULT_BASE_URL = "https://api.holdsport.dk/v1";
 
 export interface Config {
   username: string;

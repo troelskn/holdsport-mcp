@@ -9,65 +9,51 @@
  * Read-only by design: there is no arbitrary-request tool, so an agent can never
  * modify Holdsport data. The escape hatch (`get`) is restricted to GET.
  *
- * Credentials come from command-line flags (this is how the Cowork MCP config
- * passes them), falling back to the same env vars the CLI uses:
- *
- *     holdsport-mcp --username you@example.com --password secret --team-id 12345
- *
- * Flags: --username, --password, --team-id, --base-url.
- * Note: argv-passed secrets are visible to `ps`; that's acceptable here because
- * the MCP host config supplies them in a non-interactive launch.
+ * Credentials are passed on every tool call: each tool takes `username` and
+ * `password` (and optional `team_id` / `base_url`) in its arguments, and a fresh
+ * client is built per call. The server itself takes no startup arguments and
+ * holds no credentials — the MCP host supplies them with each invocation.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-import { HoldsportClient, loadConfig, type Config } from "../src/client.ts";
-
-/** Minimal `--flag value` / `--flag=value` parser for the server's own argv. */
-function parseFlags(argv: string[]): Record<string, string> {
-  const flags: Record<string, string> = {};
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (!arg.startsWith("--")) continue;
-    const eq = arg.indexOf("=");
-    if (eq !== -1) {
-      flags[arg.slice(2, eq)] = arg.slice(eq + 1);
-    } else {
-      const next = argv[i + 1];
-      if (next !== undefined && !next.startsWith("--")) {
-        flags[arg.slice(2)] = next;
-        i++;
-      } else {
-        flags[arg.slice(2)] = "true";
-      }
-    }
-  }
-  return flags;
-}
-
-// Resolve config up front: missing credentials are a server-start failure (an
-// MCP server that can't authenticate has nothing useful to offer).
-const argv = parseFlags(process.argv.slice(2));
-const overrides: Partial<Config> = {
-  username: argv.username,
-  password: argv.password,
-  teamId: argv["team-id"],
-  baseUrl: argv["base-url"],
-};
-
-let client: HoldsportClient;
-try {
-  client = new HoldsportClient(loadConfig(overrides));
-} catch (err) {
-  console.error(
-    `holdsport-mcp: ${err instanceof Error ? err.message : String(err)}`,
-  );
-  process.exit(1);
-}
+import { DEFAULT_BASE_URL, HoldsportClient } from "../src/client.ts";
 
 const server = new McpServer({ name: "holdsport", version: "1.0.0" });
+
+/** Credential + connection fields every tool accepts. */
+const auth = {
+  username: z.string().describe("Holdsport login (email)"),
+  password: z.string().describe("Holdsport password"),
+  base_url: z
+    .string()
+    .optional()
+    .describe(`Override API base URL (default: ${DEFAULT_BASE_URL})`),
+};
+
+const teamId = z
+  .string()
+  .optional()
+  .describe("Team id (required for team-scoped data)");
+
+type Auth = {
+  username: string;
+  password: string;
+  base_url?: string;
+  team_id?: string;
+};
+
+/** Build a per-call client from the credentials supplied in a tool's arguments. */
+function clientFor(a: Auth): HoldsportClient {
+  return new HoldsportClient({
+    username: a.username,
+    password: a.password,
+    baseUrl: a.base_url ?? DEFAULT_BASE_URL,
+    teamId: a.team_id,
+  });
+}
 
 /** Serialize tool output as pretty JSON text content. */
 function ok(data: unknown) {
@@ -91,19 +77,24 @@ function toolError(err: unknown) {
 
 /**
  * Register a tool whose handler returns plain data; wraps it so the result is
- * serialized and any throw becomes an `isError` result.
+ * serialized and any throw becomes an `isError` result. Every tool's input
+ * schema carries the credential fields, so the handler always receives them.
  */
-function tool<Shape extends z.ZodRawShape>(
+function tool<Extra extends z.ZodRawShape>(
   name: string,
-  config: { title: string; description: string; inputSchema?: Shape },
-  run: (args: z.infer<z.ZodObject<Shape>>) => Promise<unknown>,
+  config: { title: string; description: string; inputSchema?: Extra },
+  run: (
+    client: HoldsportClient,
+    args: z.infer<z.ZodObject<Extra & typeof auth>>,
+  ) => Promise<unknown>,
 ): void {
+  const inputSchema = { ...auth, ...(config.inputSchema ?? ({} as Extra)) };
   server.registerTool(
     name,
-    { ...config, inputSchema: config.inputSchema ?? ({} as Shape) },
-    async (args: z.infer<z.ZodObject<Shape>>) => {
+    { title: config.title, description: config.description, inputSchema },
+    async (args: z.infer<z.ZodObject<Extra & typeof auth>>) => {
       try {
-        return ok(await run(args));
+        return ok(await run(clientFor(args), args));
       } catch (err) {
         return toolError(err);
       }
@@ -111,15 +102,10 @@ function tool<Shape extends z.ZodRawShape>(
   );
 }
 
-const teamId = z
-  .string()
-  .optional()
-  .describe("Team id; defaults to the server's configured team");
-
 tool(
   "teams",
   { title: "List teams", description: "List the teams you belong to." },
-  () => client.listTeams(),
+  (client) => client.listTeams(),
 );
 
 tool(
@@ -129,7 +115,7 @@ tool(
     description: "List a team's members (full raw member records).",
     inputSchema: { team_id: teamId },
   },
-  (a) => client.listMembers(a.team_id),
+  (client, a) => client.listMembers(a.team_id),
 );
 
 tool(
@@ -142,7 +128,7 @@ tool(
       team_id: teamId,
     },
   },
-  (a) => client.getMember(a.member_id, a.team_id),
+  (client, a) => client.getMember(a.member_id, a.team_id),
 );
 
 tool(
@@ -157,7 +143,7 @@ tool(
       staff: z.boolean().optional().describe("Only staff (role 2)"),
     },
   },
-  (a) => client.roster(a.team_id, { players: a.players, staff: a.staff }),
+  (client, a) => client.roster(a.team_id, { players: a.players, staff: a.staff }),
 );
 
 tool(
@@ -167,7 +153,7 @@ tool(
     description: "List a team's notes.",
     inputSchema: { team_id: teamId },
   },
-  (a) => client.listNotes(a.team_id),
+  (client, a) => client.listNotes(a.team_id),
 );
 
 tool(
@@ -183,7 +169,7 @@ tool(
       per_page: z.number().optional(),
     },
   },
-  (a) =>
+  (client, a) =>
     client.listActivities(a.team_id, {
       date: a.date,
       page: a.page,
@@ -201,7 +187,7 @@ tool(
       team_id: teamId,
     },
   },
-  (a) => client.getActivity(a.activity_id, a.team_id),
+  (client, a) => client.getActivity(a.activity_id, a.team_id),
 );
 
 tool(
@@ -212,7 +198,7 @@ tool(
       "List an activity's attendees (activities_users). Omits people who haven't answered — use headcount for a full tally.",
     inputSchema: { activity_id: z.string().describe("Activity id") },
   },
-  (a) => client.listAttendees(a.activity_id),
+  (client, a) => client.listAttendees(a.activity_id),
 );
 
 tool(
@@ -227,7 +213,8 @@ tool(
       players: z.boolean().optional().describe("Only count players (role 1)"),
     },
   },
-  (a) => client.headcount(a.activity_id, a.team_id, { players: a.players }),
+  (client, a) =>
+    client.headcount(a.activity_id, a.team_id, { players: a.players }),
 );
 
 tool(
@@ -237,19 +224,19 @@ tool(
     description: "List an activity's tasks.",
     inputSchema: { activity_id: z.string().describe("Activity id") },
   },
-  (a) => client.listTasks(a.activity_id),
+  (client, a) => client.listTasks(a.activity_id),
 );
 
 tool(
   "user",
   { title: "Current user", description: "Show the current user profile." },
-  () => client.getUser(),
+  (client) => client.getUser(),
 );
 
 tool(
   "profiles",
   { title: "List profiles", description: "List managed profiles." },
-  () => client.listProfiles(),
+  (client) => client.listProfiles(),
 );
 
 tool(
@@ -266,7 +253,7 @@ tool(
         .describe("Query parameters"),
     },
   },
-  (a) => client.get(a.path, a.query),
+  (client, a) => client.get(a.path, a.query),
 );
 
 await server.connect(new StdioServerTransport());
