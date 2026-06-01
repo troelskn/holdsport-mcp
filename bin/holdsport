@@ -1,0 +1,571 @@
+#!/usr/bin/env bun
+/**
+ * holdsport — a tiny CLI for the Holdsport HTTP API.
+ *
+ * Holdsport is the club management platform RSIK runs on (rosters, schedule,
+ * sign-ups). This script talks to its REST API so we can script the boring
+ * parts of running the U16 team (headcounts, contact lists, activities).
+ *
+ * API docs: https://github.com/Holdsport/holdsport-api
+ * Only documented endpoints are wrapped below. The generic `get` / `request`
+ * commands are the escape hatch for anything not yet given its own command.
+ *
+ * Run with no arguments (or `--help`) for usage.
+ *
+ * Auth: the Holdsport API uses HTTP Basic auth with your Holdsport login.
+ * Provide credentials via environment variables:
+ *
+ *     export HOLDSPORT_USERNAME="you@example.com"
+ *     export HOLDSPORT_PASSWORD="your-password"
+ */
+
+const DEFAULT_BASE_URL = "https://api.holdsport.dk/v1";
+
+interface Config {
+  username: string;
+  password: string;
+  baseUrl: string;
+}
+
+type Query = Record<string, string | number | undefined>;
+
+function loadConfig(): Config {
+  const username = process.env.HOLDSPORT_USERNAME;
+  const password = process.env.HOLDSPORT_PASSWORD;
+
+  if (!username || !password) {
+    fail(
+      "Missing credentials. Set HOLDSPORT_USERNAME and HOLDSPORT_PASSWORD in your environment.",
+    );
+  }
+
+  return {
+    username,
+    password,
+    baseUrl: process.env.HOLDSPORT_BASE_URL ?? DEFAULT_BASE_URL,
+  };
+}
+
+/** Perform an authenticated request and return the parsed JSON body. */
+async function request(
+  config: Config,
+  method: string,
+  path: string,
+  opts: { query?: Query; body?: unknown } = {},
+): Promise<unknown> {
+  const url = new URL(
+    path.startsWith("http")
+      ? path
+      : `${config.baseUrl}/${path.replace(/^\/+/, "")}`,
+  );
+  for (const [key, value] of Object.entries(opts.query ?? {})) {
+    if (value !== undefined) url.searchParams.set(key, String(value));
+  }
+
+  const auth = Buffer.from(`${config.username}:${config.password}`).toString(
+    "base64",
+  );
+
+  const res = await fetch(url, {
+    method,
+    headers: {
+      Authorization: `Basic ${auth}`,
+      Accept: "application/json",
+      ...(opts.body ? { "Content-Type": "application/json" } : {}),
+    },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+
+  const text = await res.text();
+
+  if (!res.ok) {
+    fail(
+      `HTTP ${res.status} ${res.statusText} for ${method} ${url.pathname}${url.search}\n${text}`,
+    );
+  }
+
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+function print(data: unknown): void {
+  console.log(typeof data === "string" ? data : JSON.stringify(data, null, 2));
+}
+
+/** Render an aligned text table with a header underline. */
+function table(headers: string[], rows: string[][]): string {
+  const widths = headers.map((h, i) =>
+    Math.max(h.length, ...rows.map((r) => (r[i] ?? "").length)),
+  );
+  const fmt = (cells: string[]) =>
+    cells.map((c, i) => (c ?? "").padEnd(widths[i])).join("  ").trimEnd();
+  return [
+    fmt(headers),
+    widths.map((w) => "─".repeat(w)).join("  "),
+    ...rows.map(fmt),
+  ].join("\n");
+}
+
+/** Quote a CSV field if it contains a comma, quote, or newline. */
+function csvField(value: string): string {
+  return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+/** Stringify a scalar for display; ISO timestamps become Danish DD-MM-YYYY HH:MM. */
+function cell(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  const s = String(value);
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (iso) return `${iso[3]}-${iso[2]}-${iso[1]} ${iso[4]}:${iso[5]}`;
+  return s.replace(/\s+/g, " ").trim();
+}
+
+function isScalar(value: unknown): boolean {
+  return value === null || ["string", "number", "boolean"].includes(typeof value);
+}
+
+/**
+ * Render API data for humans: an array of objects becomes a table, a single
+ * object becomes a key/value list. `fields` picks/orders columns; without it,
+ * every scalar field is shown. Long values are clipped.
+ */
+function renderHuman(
+  data: unknown,
+  opts: { fields?: string[]; maxWidth?: number } = {},
+): string {
+  const maxWidth = opts.maxWidth ?? 60;
+  const clip = (s: string) =>
+    s.length > maxWidth ? `${s.slice(0, maxWidth - 1)}…` : s;
+
+  if (Array.isArray(data)) {
+    if (data.length === 0) return "(none)";
+    const records = data.filter((x) => x && typeof x === "object");
+    if (records.length !== data.length) {
+      return data.map((v) => cell(v)).join("\n");
+    }
+    const objs = records as Array<Record<string, unknown>>;
+    let cols = opts.fields;
+    if (!cols) {
+      cols = [];
+      for (const o of objs) {
+        for (const k of Object.keys(o)) {
+          if (isScalar(o[k]) && !cols.includes(k)) cols.push(k);
+        }
+      }
+    }
+    const rows = objs.map((o) => cols!.map((k) => clip(cell(o[k]))));
+    return `${table(cols, rows)}\n\n${data.length} rows`;
+  }
+
+  if (data && typeof data === "object") {
+    const o = data as Record<string, unknown>;
+    const keys = opts.fields ?? Object.keys(o).filter((k) => isScalar(o[k]));
+    if (keys.length === 0) return "(no fields)";
+    const width = Math.max(...keys.map((k) => k.length));
+    return keys.map((k) => `${k.padEnd(width)}  ${clip(cell(o[k]))}`).join("\n");
+  }
+
+  return cell(data);
+}
+
+/** Print as raw JSON when --json is set, else as a human-readable view. */
+function output(
+  data: unknown,
+  flags: Query,
+  opts: { fields?: string[]; maxWidth?: number } = {},
+): void {
+  if (flags.json) print(data);
+  else console.log(renderHuman(data, opts));
+}
+
+function fail(message: string): never {
+  console.error(`error: ${message}`);
+  process.exit(1);
+}
+
+/**
+ * Split argv into positionals and `--flag value` / `--flag=value` pairs.
+ * Bare `--flag` (no value) becomes the string "true".
+ */
+function parseArgs(argv: string[]): { positional: string[]; flags: Query } {
+  const positional: string[] = [];
+  const flags: Query = {};
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg.startsWith("--")) {
+      const eq = arg.indexOf("=");
+      if (eq !== -1) {
+        flags[arg.slice(2, eq)] = arg.slice(eq + 1);
+      } else {
+        const next = argv[i + 1];
+        if (next !== undefined && !next.startsWith("--")) {
+          flags[arg.slice(2)] = next;
+          i++;
+        } else {
+          flags[arg.slice(2)] = "true";
+        }
+      }
+    } else {
+      positional.push(arg);
+    }
+  }
+
+  return { positional, flags };
+}
+
+function need(args: string[], index: number, label: string): string {
+  const value = args[index];
+  if (value === undefined) fail(`missing argument: <${label}>`);
+  return value;
+}
+
+/** Resolve the target team from --team flag, else HOLDSPORT_TEAM_ID. */
+function resolveTeam(flags: Query): string {
+  const team = flags.team ?? process.env.HOLDSPORT_TEAM_ID;
+  if (!team) {
+    fail("no team set: pass --team <id> or set HOLDSPORT_TEAM_ID in .env");
+  }
+  return String(team);
+}
+
+// --- Commands --------------------------------------------------------------
+
+const USAGE = `holdsport — CLI for the Holdsport API
+
+Usage:
+  holdsport <command> [args] [--flags]
+
+Team-scoped commands use HOLDSPORT_TEAM_ID by default; override with --team <id>.
+Output is human-readable by default; add --json for raw JSON (roster also has --csv).
+
+Read commands:
+  teams                       List the teams you belong to
+  members                     List the team's members (raw JSON)
+  member <member_id>          Show a single member
+  roster                      Contact list: name/role/mobile/email
+                                flags: --players, --staff, --csv
+  notes                       List the team's notes
+  activities [date]           List the team's activities (date = YYYY-MM-DD, from that day on)
+                                flags: --page N --per-page N
+  activity <activity_id>      Show a single activity
+  attendees <activity_id>     List an activity's attendees (activities_users)
+  headcount <activity_id>     Tally attendees by status (flags: --players, --names, --json)
+  tasks <activity_id>         List an activity's tasks
+  user                        Show the current user profile
+  profiles                    List managed profiles
+
+Escape hatch (for undocumented / write endpoints):
+  get <path> [--key val ...]      Raw GET; flags become query params
+  request <METHOD> <path> [json]  Raw request with optional JSON body string
+
+Other:
+  help                        Show this help
+
+Environment:
+  HOLDSPORT_USERNAME    Holdsport login (email)
+  HOLDSPORT_PASSWORD    Holdsport password
+  HOLDSPORT_TEAM_ID     Default team id for team-scoped commands
+  HOLDSPORT_BASE_URL    Override API base URL (default: ${DEFAULT_BASE_URL})
+`;
+
+async function main(argv: string[]): Promise<void> {
+  const [command, ...rest] = argv;
+  const { positional, flags } = parseArgs(rest);
+
+  if (
+    command === undefined ||
+    command === "help" ||
+    command === "-h" ||
+    command === "--help"
+  ) {
+    console.log(USAGE);
+    return;
+  }
+
+  const config = loadConfig();
+
+  switch (command) {
+    case "teams":
+      return output(await request(config, "GET", "teams"), flags, {
+        fields: ["id", "name", "role"],
+      });
+
+    case "members": {
+      const teamId = resolveTeam(flags);
+      return output(
+        await request(config, "GET", `teams/${teamId}/members`),
+        flags,
+        { fields: ["id", "firstname", "lastname", "role", "birthday", "member_number"] },
+      );
+    }
+
+    case "member": {
+      const teamId = resolveTeam(flags);
+      const memberId = need(positional, 0, "member_id");
+      return output(
+        await request(config, "GET", `teams/${teamId}/members/${memberId}`),
+        flags,
+        { fields: ["id", "firstname", "lastname", "role", "birthday", "member_number"] },
+      );
+    }
+
+    case "roster": {
+      const teamId = resolveTeam(flags);
+      const data = await request(config, "GET", `teams/${teamId}/members`);
+      let members = (Array.isArray(data) ? data : []) as Array<{
+        firstname?: string;
+        lastname?: string;
+        role?: number;
+        birthday?: string;
+        member_number?: string;
+        addresses?: Array<{ mobile?: string; email?: string }>;
+      }>;
+
+      if (flags.players) members = members.filter((m) => m.role === 1);
+      if (flags.staff) members = members.filter((m) => m.role === 2);
+
+      const roleLabel = (role?: number) =>
+        role === 1 ? "player" : role === 2 ? "staff" : String(role ?? "");
+      // Holdsport returns the string "false" as a null sentinel for empty fields.
+      const distinct = (values: Array<unknown>) =>
+        [
+          ...new Set(
+            values
+              .map((v) => String(v ?? "").trim())
+              .filter((s) => s && s.toLowerCase() !== "false"),
+          ),
+        ].join("; ");
+
+      const rows = members
+        .map((m) => {
+          const addrs = m.addresses ?? [];
+          return {
+            name: `${m.firstname ?? ""} ${m.lastname ?? ""}`
+              .replace(/\s+/g, " ")
+              .trim(),
+            role: roleLabel(m.role),
+            birthday: m.birthday ?? "",
+            mobile: distinct(addrs.map((a) => a.mobile)),
+            email: distinct(addrs.map((a) => a.email)),
+            member_number: m.member_number ?? "",
+          };
+        })
+        .sort(
+          (a, b) =>
+            a.role.localeCompare(b.role) || a.name.localeCompare(b.name, "da"),
+        );
+
+      if (flags.json) return print(rows);
+
+      if (flags.csv) {
+        const headers = [
+          "name",
+          "role",
+          "birthday",
+          "mobile",
+          "email",
+          "member_number",
+        ];
+        const lines = [headers.join(",")];
+        for (const r of rows) {
+          lines.push(
+            [
+              r.name,
+              r.role,
+              r.birthday,
+              r.mobile,
+              r.email,
+              r.member_number,
+            ]
+              .map(csvField)
+              .join(","),
+          );
+        }
+        console.log(lines.join("\n"));
+        return;
+      }
+
+      console.log(
+        table(
+          ["Name", "Role", "Mobile", "Email"],
+          rows.map((r) => [r.name, r.role, r.mobile, r.email]),
+        ),
+      );
+      const players = rows.filter((r) => r.role === "player").length;
+      const staff = rows.filter((r) => r.role === "staff").length;
+      console.log(`\n${rows.length} members (${players} players, ${staff} staff)`);
+      return;
+    }
+
+    case "notes": {
+      const teamId = resolveTeam(flags);
+      return output(
+        await request(config, "GET", `teams/${teamId}/notes`),
+        flags,
+        { fields: ["created_at", "title", "created_by"] },
+      );
+    }
+
+    case "activities": {
+      const teamId = resolveTeam(flags);
+      const query: Query = {
+        date: positional[0],
+        page: flags.page,
+        per_page: flags["per-page"] ?? flags.per_page,
+      };
+      return output(
+        await request(config, "GET", `teams/${teamId}/activities`, { query }),
+        flags,
+        { fields: ["id", "starttime", "endtime", "name", "place", "status"] },
+      );
+    }
+
+    case "activity": {
+      const teamId = resolveTeam(flags);
+      const activityId = need(positional, 0, "activity_id");
+      return output(
+        await request(config, "GET", `teams/${teamId}/activities/${activityId}`),
+        flags,
+        {
+          fields: [
+            "id",
+            "name",
+            "starttime",
+            "endtime",
+            "place",
+            "pickup_place",
+            "pickup_time",
+            "status",
+            "comment",
+          ],
+        },
+      );
+    }
+
+    case "attendees": {
+      const activityId = need(positional, 0, "activity_id");
+      return output(
+        await request(config, "GET", `activities/${activityId}/activities_users`),
+        flags,
+        { fields: ["user_id", "name", "status", "status_code"] },
+      );
+    }
+
+    case "headcount": {
+      const teamId = resolveTeam(flags);
+      const activityId = need(positional, 0, "activity_id");
+      // The team activity-detail endpoint embeds the *full* invited list,
+      // including no-answers (Ukendt). The /activities/:id/activities_users
+      // endpoint omits them, so it can't be trusted for a headcount.
+      const data = (await request(
+        config,
+        "GET",
+        `teams/${teamId}/activities/${activityId}`,
+      )) as { activities_users?: unknown };
+      let users = (
+        Array.isArray(data?.activities_users) ? data.activities_users : []
+      ) as Array<{
+        status?: string;
+        status_code?: number;
+        name?: string;
+        user_id?: number;
+      }>;
+
+      // The invite list mixes players with coaches/leaders/parents. --players
+      // narrows it to actual players (role 1) by joining on member id.
+      if (flags.players) {
+        const membersData = await request(
+          config,
+          "GET",
+          `teams/${teamId}/members`,
+        );
+        const members = (
+          Array.isArray(membersData) ? membersData : []
+        ) as Array<{ id?: number; role?: number }>;
+        const playerIds = new Set(
+          members.filter((m) => m.role === 1).map((m) => m.id),
+        );
+        users = users.filter((u) => playerIds.has(u.user_id));
+      }
+
+      // Group by the human-readable status; remember each status_code so we
+      // can order the buckets (1 = Tilmeldt, 2 = Afmeldt, ...).
+      const groups = new Map<string, { code: number; names: string[] }>();
+      for (const u of users) {
+        const status = u.status ?? "(ukendt)";
+        const code = typeof u.status_code === "number" ? u.status_code : 99;
+        const group = groups.get(status) ?? { code, names: [] };
+        group.names.push(u.name ?? "(unnamed)");
+        groups.set(status, group);
+      }
+      const ordered = [...groups.entries()].sort(
+        (a, b) => a[1].code - b[1].code,
+      );
+
+      if (flags.json) {
+        return print({
+          activity_id: Number(activityId),
+          total: users.length,
+          status: Object.fromEntries(
+            ordered.map(([status, g]) => [status, g.names.length]),
+          ),
+          people: users.map((u) => ({
+            user_id: u.user_id,
+            name: u.name,
+            status: u.status,
+            status_code: u.status_code,
+          })),
+        });
+      }
+
+      const lines = [`Activity ${activityId}`];
+      for (const [status, g] of ordered) {
+        lines.push(`  ${status.padEnd(12)}${String(g.names.length).padStart(4)}`);
+        if (flags.names) for (const n of g.names) lines.push(`      - ${n}`);
+      }
+      lines.push(`  ${"─".repeat(16)}`);
+      lines.push(`  ${"Total".padEnd(12)}${String(users.length).padStart(4)}`);
+      console.log(lines.join("\n"));
+      return;
+    }
+
+    case "tasks": {
+      const activityId = need(positional, 0, "activity_id");
+      return output(
+        await request(config, "GET", `activities/${activityId}/activity_tasks`),
+        flags,
+      );
+    }
+
+    case "user":
+      return output(await request(config, "GET", "user"), flags, {
+        fields: ["id", "firstname", "lastname", "birthday"],
+      });
+
+    case "profiles":
+      return output(await request(config, "GET", "profiles"), flags);
+
+    case "get": {
+      const path = need(positional, 0, "path");
+      const { json: _json, ...query } = flags;
+      return output(await request(config, "GET", path, { query }), flags);
+    }
+
+    case "request": {
+      const method = need(positional, 0, "METHOD").toUpperCase();
+      const path = need(positional, 1, "path");
+      const body = positional[2] ? JSON.parse(positional[2]) : undefined;
+      return output(await request(config, method, path, { body }), flags);
+    }
+
+    default:
+      fail(`unknown command: ${command}\n\n${USAGE}`);
+  }
+}
+
+main(process.argv.slice(2)).catch((err) => fail(String(err)));
