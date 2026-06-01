@@ -1,0 +1,272 @@
+#!/usr/bin/env bun
+/**
+ * holdsport-mcp — a read-only MCP server over the Holdsport API.
+ *
+ * Exposes the same read commands as the `holdsport` CLI as MCP tools so they can
+ * be driven from Claude Cowork (or any MCP host). It shares the data + business
+ * logic in ../src/client.ts with the CLI; the only thing here is tool wiring.
+ *
+ * Read-only by design: there is no arbitrary-request tool, so an agent can never
+ * modify Holdsport data. The escape hatch (`get`) is restricted to GET.
+ *
+ * Credentials come from command-line flags (this is how the Cowork MCP config
+ * passes them), falling back to the same env vars the CLI uses:
+ *
+ *     holdsport-mcp --username you@example.com --password secret --team-id 12345
+ *
+ * Flags: --username, --password, --team-id, --base-url.
+ * Note: argv-passed secrets are visible to `ps`; that's acceptable here because
+ * the MCP host config supplies them in a non-interactive launch.
+ */
+
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+
+import { HoldsportClient, loadConfig, type Config } from "../src/client.ts";
+
+/** Minimal `--flag value` / `--flag=value` parser for the server's own argv. */
+function parseFlags(argv: string[]): Record<string, string> {
+  const flags: Record<string, string> = {};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (!arg.startsWith("--")) continue;
+    const eq = arg.indexOf("=");
+    if (eq !== -1) {
+      flags[arg.slice(2, eq)] = arg.slice(eq + 1);
+    } else {
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith("--")) {
+        flags[arg.slice(2)] = next;
+        i++;
+      } else {
+        flags[arg.slice(2)] = "true";
+      }
+    }
+  }
+  return flags;
+}
+
+// Resolve config up front: missing credentials are a server-start failure (an
+// MCP server that can't authenticate has nothing useful to offer).
+const argv = parseFlags(process.argv.slice(2));
+const overrides: Partial<Config> = {
+  username: argv.username,
+  password: argv.password,
+  teamId: argv["team-id"],
+  baseUrl: argv["base-url"],
+};
+
+let client: HoldsportClient;
+try {
+  client = new HoldsportClient(loadConfig(overrides));
+} catch (err) {
+  console.error(
+    `holdsport-mcp: ${err instanceof Error ? err.message : String(err)}`,
+  );
+  process.exit(1);
+}
+
+const server = new McpServer({ name: "holdsport", version: "1.0.0" });
+
+/** Serialize tool output as pretty JSON text content. */
+function ok(data: unknown) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
+  };
+}
+
+/** Surface a thrown error as a tool error rather than crashing the server. */
+function toolError(err: unknown) {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `Error: ${err instanceof Error ? err.message : String(err)}`,
+      },
+    ],
+    isError: true,
+  };
+}
+
+/**
+ * Register a tool whose handler returns plain data; wraps it so the result is
+ * serialized and any throw becomes an `isError` result.
+ */
+function tool<Shape extends z.ZodRawShape>(
+  name: string,
+  config: { title: string; description: string; inputSchema?: Shape },
+  run: (args: z.infer<z.ZodObject<Shape>>) => Promise<unknown>,
+): void {
+  server.registerTool(
+    name,
+    { ...config, inputSchema: config.inputSchema ?? ({} as Shape) },
+    async (args: z.infer<z.ZodObject<Shape>>) => {
+      try {
+        return ok(await run(args));
+      } catch (err) {
+        return toolError(err);
+      }
+    },
+  );
+}
+
+const teamId = z
+  .string()
+  .optional()
+  .describe("Team id; defaults to the server's configured team");
+
+tool(
+  "teams",
+  { title: "List teams", description: "List the teams you belong to." },
+  () => client.listTeams(),
+);
+
+tool(
+  "members",
+  {
+    title: "List members",
+    description: "List a team's members (full raw member records).",
+    inputSchema: { team_id: teamId },
+  },
+  (a) => client.listMembers(a.team_id),
+);
+
+tool(
+  "member",
+  {
+    title: "Get member",
+    description: "Show a single member by id.",
+    inputSchema: {
+      member_id: z.string().describe("Member id"),
+      team_id: teamId,
+    },
+  },
+  (a) => client.getMember(a.member_id, a.team_id),
+);
+
+tool(
+  "roster",
+  {
+    title: "Team roster",
+    description:
+      "Contact list shaped for humans: name, role, birthday, mobile, email, member number.",
+    inputSchema: {
+      team_id: teamId,
+      players: z.boolean().optional().describe("Only players (role 1)"),
+      staff: z.boolean().optional().describe("Only staff (role 2)"),
+    },
+  },
+  (a) => client.roster(a.team_id, { players: a.players, staff: a.staff }),
+);
+
+tool(
+  "notes",
+  {
+    title: "List notes",
+    description: "List a team's notes.",
+    inputSchema: { team_id: teamId },
+  },
+  (a) => client.listNotes(a.team_id),
+);
+
+tool(
+  "activities",
+  {
+    title: "List activities",
+    description:
+      "List a team's activities. Optional date (YYYY-MM-DD) lists from that day on.",
+    inputSchema: {
+      team_id: teamId,
+      date: z.string().optional().describe("Start date YYYY-MM-DD"),
+      page: z.number().optional(),
+      per_page: z.number().optional(),
+    },
+  },
+  (a) =>
+    client.listActivities(a.team_id, {
+      date: a.date,
+      page: a.page,
+      perPage: a.per_page,
+    }),
+);
+
+tool(
+  "activity",
+  {
+    title: "Get activity",
+    description: "Show a single activity by id.",
+    inputSchema: {
+      activity_id: z.string().describe("Activity id"),
+      team_id: teamId,
+    },
+  },
+  (a) => client.getActivity(a.activity_id, a.team_id),
+);
+
+tool(
+  "attendees",
+  {
+    title: "List attendees",
+    description:
+      "List an activity's attendees (activities_users). Omits people who haven't answered — use headcount for a full tally.",
+    inputSchema: { activity_id: z.string().describe("Activity id") },
+  },
+  (a) => client.listAttendees(a.activity_id),
+);
+
+tool(
+  "headcount",
+  {
+    title: "Headcount",
+    description:
+      "Tally an activity's full invited list by status (includes no-answers). players=true narrows to actual players.",
+    inputSchema: {
+      activity_id: z.string().describe("Activity id"),
+      team_id: teamId,
+      players: z.boolean().optional().describe("Only count players (role 1)"),
+    },
+  },
+  (a) => client.headcount(a.activity_id, a.team_id, { players: a.players }),
+);
+
+tool(
+  "tasks",
+  {
+    title: "List tasks",
+    description: "List an activity's tasks.",
+    inputSchema: { activity_id: z.string().describe("Activity id") },
+  },
+  (a) => client.listTasks(a.activity_id),
+);
+
+tool(
+  "user",
+  { title: "Current user", description: "Show the current user profile." },
+  () => client.getUser(),
+);
+
+tool(
+  "profiles",
+  { title: "List profiles", description: "List managed profiles." },
+  () => client.listProfiles(),
+);
+
+tool(
+  "get",
+  {
+    title: "Raw GET",
+    description:
+      "Read-only escape hatch: issue a raw GET to any Holdsport API path. Query params are passed through.",
+    inputSchema: {
+      path: z.string().describe("API path, e.g. teams/123/members"),
+      query: z
+        .record(z.union([z.string(), z.number()]))
+        .optional()
+        .describe("Query parameters"),
+    },
+  },
+  (a) => client.get(a.path, a.query),
+);
+
+await server.connect(new StdioServerTransport());

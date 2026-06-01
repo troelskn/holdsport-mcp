@@ -1,0 +1,21 @@
+{
+  "name": "holdsport",
+  "version": "1.0.0",
+  "description": "CLI and MCP server for the Holdsport API",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "bun test"
+  },
+  "bin": {
+    "holdsport": "bin/holdsport",
+    "holdsport-mcp": "bin/holdsport-mcp"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "zod": "^3.25"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14"
+  }
+}
