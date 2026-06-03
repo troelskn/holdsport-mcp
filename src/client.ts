@@ -4,13 +4,12 @@
  *
  * Two backends live behind one client:
  *  - The REST API (https://api.holdsport.dk/v1) over HTTP Basic auth, for
- *    teams/members/activities/etc. (`request`/`get` and the methods built on
- *    them).
- *  - The GraphQL API (https://www.holdsport.dk/graphql) for chat, which REST
- *    doesn't expose. It needs the `X-App-Version` header to answer at all, a
- *    `SignIn` mutation to mint an access token, and that token echoed back in a
- *    raw `Authorization` header. See CHAT_API.md for the reverse-engineered
- *    details. Chat reads are exposed via `listChatRooms`/`chatRoom`.
+ *    teams/members/roster/etc. (the private `get` and the methods built on it).
+ *  - The GraphQL API (https://www.holdsport.dk/graphql) for chat, email, and
+ *    activities, which REST doesn't expose. It needs the `X-App-Version` header
+ *    to answer at all, a `SignIn` mutation to mint an access token, and that
+ *    token echoed back in a raw `Authorization` header — all reverse-engineered
+ *    from the mobile app.
  *
  * Nothing in here writes to the terminal or calls process.exit: methods return
  * plain JS data and throw `Error` on failure, so each front-end decides how to

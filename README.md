@@ -1,9 +1,20 @@
-# holdsport
+# Holdsport MCP
 
-A tiny [Bun](https://bun.sh) toolkit for the [Holdsport API](https://github.com/Holdsport/holdsport-api), shipping two binaries that share one data layer:
+Scriptable access to [Holdsport](https://holdsport.dk), the club-management platform, from the terminal or from an AI agent.
 
-- **`bin/holdsport`** — the CLI (rosters, schedule, headcounts) for the terminal.
-- **`bin/holdsport-mcp`** — a **read-only** [MCP](https://modelcontextprotocol.io) server exposing the same read commands as tools, for use from Claude Cowork (or any MCP host).
+Two things that make this different from other Holdsport tooling:
+
+- **It goes beyond the REST API.** The [documented REST API](https://github.com/Holdsport/holdsport-api) covers teams, members, and basic activity sign-ups, which is where most integrations stop. This one also talks to the mobile app's private GraphQL API to read **chat** (team / coach / parent rooms), **email** (your inbox and the bulk mailings clubs send out), and a richer **activities & attendance** view — live sign-up counts plus the named attending / not-attending / no-answer lists that REST doesn't expose.
+- **It runs as an MCP server.** Besides the CLI, it ships a read-only [MCP](https://modelcontextprotocol.io) server, so you can ask Claude (Cowork) or any MCP host to pull a roster or tally attendance without wiring up the API yourself.
+
+Under the hood there are two binaries over one shared data layer:
+
+- **`bin/holdsport`** — the CLI (rosters, schedule, attendance, chat, email) for the terminal.
+- **`bin/holdsport-mcp`** — the MCP server, exposing the same commands as tools.
+
+All commands are **read-only**, making it safe to connect to an agent.
+
+To install on your local machine, using Claude Cowork, see: [Register with Claude Cowork](#register-with-claude-cowork)
 
 The shared API client + business logic lives in [`src/client.ts`](src/client.ts); CLI-only terminal rendering lives in [`src/render.ts`](src/render.ts).
 
@@ -14,7 +25,7 @@ bun install
 bun test     # unit tests (offline — network is mocked)
 ```
 
-Holdsport uses HTTP Basic auth with your Holdsport login.
+Holdsport has two backends, both handled by the shared client: a REST API (HTTP Basic auth) for teams/members/roster/etc., and a GraphQL API for chat, email, and activities (see [Chat & email](#chat--email-graphql) below). A single Holdsport login covers both.
 
 ## CLI
 
@@ -24,7 +35,7 @@ Credentials come from the environment (Bun auto-loads `.env`):
 # .env
 HOLDSPORT_USERNAME=your-login   # login username (not email/member no.), see below
 HOLDSPORT_PASSWORD=your-password
-HOLDSPORT_TEAM_ID=37141         # default team for team-scoped commands
+HOLDSPORT_TEAM_ID=12345         # default team for team-scoped commands
 ```
 
 One login username is used everywhere. REST Basic auth accepts your email, member number, or login username, but **chat/email only accepts the login username** — so set `HOLDSPORT_USERNAME` to that and it works for all commands.
@@ -49,7 +60,7 @@ Credentials default to the environment but can be overridden per call with `--us
 
 ### Chat & email (GraphQL)
 
-Chat, email, and activities are **not** part of the REST API — they live on a separate GraphQL endpoint (`https://www.holdsport.dk/graphql`) with its own auth, reverse-engineered in [`CHAT_API.md`](CHAT_API.md). The client handles this transparently: it sends the required `X-App-Version` header, runs a `SignIn` mutation to mint a token, and reuses it for the read queries. These commands and tools (`chats` / `chat` / `emails` / `email` / `activities` / `activity`) are GraphQL, and all are read-only.
+Chat, email, and activities are **not** part of the REST API — they live on a separate GraphQL endpoint (`https://www.holdsport.dk/graphql`) with its own auth, reverse-engineered from the mobile app. The client handles this transparently: it sends the required `X-App-Version` header, runs a `SignIn` mutation to mint a token, and reuses it for the read queries. These commands and tools (`chats` / `chat` / `emails` / `email` / `activities` / `activity`) are GraphQL, and all are read-only.
 
 `chats` lists both your ad-hoc rooms (the ones you're directly added to) and the team-scoped rooms — team, coach, and parent chats — across all your teams, just like the app. `chats <room_id>` shows any room's transcript by id, whatever its scope.
 
@@ -57,7 +68,7 @@ Chat, email, and activities are **not** part of the REST API — they live on a 
 
 `activities [date]` lists a team's upcoming activities (type, place, sign-up count), paginated with `--page`. `activities <activity_id>` shows one activity with a full attendance breakdown — counts plus, with `--names`, the named attending / not-attending / no-answer lists.
 
-`SignIn` requires the **login username** (e.g. `troelsknaknielsen`) — not the email or member number. Since REST Basic auth also accepts the login username, a single `HOLDSPORT_USERNAME` set to it works for every command.
+`SignIn` requires the **login username** (e.g. `your-login`) — not the email or member number. Since REST Basic auth also accepts the login username, a single `HOLDSPORT_USERNAME` set to it works for every command.
 
 Minted tokens are cached in-process, keyed by login — so the long-lived MCP server can serve multiple users without ever handing one login's token to another, and repeat calls skip re-authenticating.
 
@@ -79,7 +90,7 @@ bun bin/holdsport-mcp
     "holdsport": {
       "command": "bun",
       "args": [
-        "/Users/troelskn/Projects/claude-holdsport-mcp-server/bin/holdsport-mcp"
+        "/Users/troelskn/Projects/holdsport-mcp/bin/holdsport-mcp"
       ]
     }
   }
