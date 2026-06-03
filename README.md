@@ -46,6 +46,8 @@ Credentials default to the environment but can be overridden per call with `--us
 
 Chat is **not** part of the REST API — it lives on a separate GraphQL endpoint (`https://www.holdsport.dk/graphql`) with its own auth, reverse-engineered in [`CHAT_API.md`](CHAT_API.md). The client handles this transparently: it sends the required `X-App-Version` header, runs a `SignIn` mutation to mint a token, and reuses it for the read queries. The `chats` / `chat` commands and tools are the only GraphQL surface, and both are read-only.
 
+`chats` lists both your ad-hoc rooms (the ones you're directly added to) and the team-scoped rooms — team, coach, and parent chats — across all your teams, just like the app. `chat <room_id>` shows any room's transcript by id, whatever its scope.
+
 One wrinkle: `SignIn` wants the **login username** (e.g. `troelsknaknielsen`), which is *not* the email used for REST Basic auth and may resolve to a different linked account. Set `HOLDSPORT_CHAT_USERNAME` when it differs from `HOLDSPORT_USERNAME`. To skip `SignIn` entirely, supply a token via `HOLDSPORT_ACCESS_TOKEN`.
 
 Minted tokens are cached in-process, keyed by login — so the long-lived MCP server can serve multiple users without ever handing one login's token to another, and repeat chat calls skip re-authenticating.

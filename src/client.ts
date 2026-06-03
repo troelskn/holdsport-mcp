@@ -155,11 +155,8 @@ const SIGN_IN = `mutation SignIn($username: String, $password: String) {
   }
 }`;
 
-/** List the current user's chat rooms with a one-line preview of each. */
-const LIST_CHAT_ROOMS = `query ListChatRooms {
-  current_user {
-    id
-    rooms_users_chat_rooms {
+/** Field set shared by both chat-room sources in the list query. */
+const ROOM_SUMMARY_FIELDS = `
       id
       name
       scope
@@ -169,10 +166,40 @@ const LIST_CHAT_ROOMS = `query ListChatRooms {
         text
         created_at { iso8601 }
         user { id name firstname }
+      }`;
+
+/**
+ * List the current user's chat rooms with a one-line preview of each. Pulls two
+ * sources the web app shows together: the ad-hoc rooms the user is a member of
+ * (`rooms_users_chat_rooms`, scope `rooms_users`) and the team-scoped rooms
+ * across all their teams (`chat_rooms_scoped`: team / coach / parent chats).
+ */
+const LIST_CHAT_ROOMS = `query ListChatRooms {
+  current_user {
+    id
+    rooms_users_chat_rooms {${ROOM_SUMMARY_FIELDS}
+    }
+    teams {
+      id
+      chat_rooms_scoped {${ROOM_SUMMARY_FIELDS}
       }
     }
   }
 }`;
+
+/** Raw GraphQL shape of a chat room in the list query, before shaping. */
+interface RawRoomSummary {
+  id: number;
+  name?: string;
+  scope?: string;
+  unread_count?: number;
+  activity?: { id: number; name?: string } | null;
+  latest_chat_message?: {
+    text?: string;
+    created_at?: { iso8601?: string } | null;
+    user?: { name?: string; firstname?: string } | null;
+  } | null;
+}
 
 /** A single room with its full message history. */
 const SHOW_CHAT_ROOM = `query ShowChatRoom($id: Int!) {
@@ -540,27 +567,31 @@ export class HoldsportClient {
     return token;
   }
 
-  /** The current user's chat rooms, most-recently-active first. */
+  /**
+   * The current user's chat rooms — both the ad-hoc rooms they belong to and the
+   * team-scoped rooms across all their teams — deduped and most-recently-active
+   * first. (Reading the messages of any of them works through `chatRoom`, which
+   * fetches by id regardless of scope.)
+   */
   async listChatRooms(): Promise<ChatRoomSummary[]> {
     const data = await this.graphql(LIST_CHAT_ROOMS);
     const user = data.current_user as {
-      rooms_users_chat_rooms?: Array<{
-        id: number;
-        name?: string;
-        scope?: string;
-        unread_count?: number;
-        activity?: { id: number; name?: string } | null;
-        latest_chat_message?: {
-          text?: string;
-          created_at?: { iso8601?: string } | null;
-          user?: { name?: string; firstname?: string } | null;
-        } | null;
-      }>;
+      rooms_users_chat_rooms?: RawRoomSummary[];
+      teams?: Array<{ chat_rooms_scoped?: RawRoomSummary[] }>;
     } | null;
-    const rooms = user?.rooms_users_chat_rooms ?? [];
 
-    return rooms
-      .map((r) => {
+    // Merge both sources; a room can be reachable via more than one relation, so
+    // dedupe by id (the ad-hoc membership row wins as it comes first).
+    const byId = new Map<number, RawRoomSummary>();
+    for (const r of [
+      ...(user?.rooms_users_chat_rooms ?? []),
+      ...(user?.teams ?? []).flatMap((t) => t.chat_rooms_scoped ?? []),
+    ]) {
+      if (!byId.has(r.id)) byId.set(r.id, r);
+    }
+
+    return [...byId.values()]
+      .map((r): ChatRoomSummary => {
         const last = r.latest_chat_message;
         return {
           id: r.id,
@@ -579,7 +610,9 @@ export class HoldsportClient {
             : null,
         };
       })
-      .sort((a, b) => (b.last_message?.time ?? "").localeCompare(a.last_message?.time ?? ""));
+      .sort((a, b) =>
+        (b.last_message?.time ?? "").localeCompare(a.last_message?.time ?? ""),
+      );
   }
 
   /**

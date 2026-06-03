@@ -312,7 +312,7 @@ const CHAT_MESSAGES = [
  * Stub the GraphQL endpoint, dispatching on the operation in the request body.
  * Returns the number of SignIn calls so tests can assert token memoization.
  */
-function stubGraphql(opts: { rooms?: unknown; room?: unknown } = {}): {
+function stubGraphql(opts: { rooms?: unknown; teams?: unknown; room?: unknown } = {}): {
   signIns: () => number;
   requests: () => Array<{ auth?: string; query: string }>;
 } {
@@ -329,7 +329,11 @@ function stubGraphql(opts: { rooms?: unknown; room?: unknown } = {}): {
     if (body.query.includes("rooms_users_chat_rooms")) {
       return json({
         data: {
-          current_user: { id: 1, rooms_users_chat_rooms: opts.rooms ?? CHAT_ROOMS },
+          current_user: {
+            id: 1,
+            rooms_users_chat_rooms: opts.rooms ?? CHAT_ROOMS,
+            teams: opts.teams ?? [],
+          },
         },
       });
     }
@@ -376,6 +380,36 @@ describe("HoldsportClient chat (GraphQL)", () => {
     });
     expect(rooms[1].activity).toEqual({ id: 555, name: "Match" });
     expect(rooms[2].last_message).toBeNull();
+  });
+
+  it("merges team-scoped rooms with ad-hoc rooms, deduped by id", async () => {
+    stubGraphql({
+      rooms: [CHAT_ROOMS[0]], // room 10, scope rooms_users
+      teams: [
+        {
+          id: 100,
+          chat_rooms_scoped: [
+            {
+              id: 20,
+              name: "Hold-chat",
+              scope: "team",
+              unread_count: 0,
+              activity: null,
+              latest_chat_message: {
+                text: "hi team",
+                created_at: { iso8601: "2025-01-11T09:00:00+01:00" },
+                user: { name: "Coach" },
+              },
+            },
+            // Same id as the ad-hoc room 10 — must be dropped as a duplicate.
+            { id: 10, name: "dup", scope: "team", unread_count: 0, activity: null, latest_chat_message: null },
+          ],
+        },
+      ],
+    });
+    const rooms = await new HoldsportClient(chatConfig).listChatRooms();
+    expect(rooms.map((r) => r.id)).toEqual([20, 10]); // team room (Jan 11) before room 10 (Jan 10)
+    expect(rooms.find((r) => r.id === 10)!.name).toBe("Team chat"); // ad-hoc copy kept, not "dup"
   });
 
   it("sends the SignIn token as a raw Authorization header on the query", async () => {
