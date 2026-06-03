@@ -24,22 +24,16 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-import {
-  DEFAULT_BASE_URL,
-  DEFAULT_GRAPHQL_URL,
-  HoldsportClient,
-} from "../src/client.ts";
+import { HoldsportClient } from "../src/client.ts";
 
 const server = new McpServer({ name: "holdsport", version: "1.0.0" });
 
-/** Credential + connection fields every tool accepts. */
+/** Credential fields every tool accepts. */
 const auth = {
-  username: z.string().describe("Holdsport login (email)"),
-  password: z.string().describe("Holdsport password"),
-  base_url: z
+  username: z
     .string()
-    .optional()
-    .describe(`Override API base URL (default: ${DEFAULT_BASE_URL})`),
+    .describe("Holdsport login username (not email / member number)"),
+  password: z.string().describe("Holdsport password"),
 };
 
 const teamId = z
@@ -50,9 +44,7 @@ const teamId = z
 type Auth = {
   username: string;
   password: string;
-  base_url?: string;
   team_id?: string;
-  graphql_url?: string;
   access_token?: string;
 };
 
@@ -61,9 +53,7 @@ function clientFor(a: Auth): HoldsportClient {
   return new HoldsportClient({
     username: a.username,
     password: a.password,
-    baseUrl: a.base_url ?? DEFAULT_BASE_URL,
     teamId: a.team_id,
-    graphqlUrl: a.graphql_url ?? DEFAULT_GRAPHQL_URL,
     accessToken: a.access_token,
   });
 }
@@ -252,12 +242,8 @@ tool(
   (client) => client.listProfiles(),
 );
 
-/** Connection fields for the GraphQL-backed tools (chat + email), not REST. */
+/** Extra field for the GraphQL-backed tools (chat + email), not REST. */
 const graphqlAuth = {
-  graphql_url: z
-    .string()
-    .optional()
-    .describe(`Override GraphQL endpoint (default: ${DEFAULT_GRAPHQL_URL})`),
   access_token: z
     .string()
     .optional()

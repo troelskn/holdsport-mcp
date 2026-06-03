@@ -39,11 +39,8 @@ export interface Config {
    */
   username: string;
   password: string;
-  baseUrl: string;
   /** Default team for team-scoped calls when no explicit id is given. */
   teamId?: string;
-  /** GraphQL (chat/email) endpoint. Defaults to {@link DEFAULT_GRAPHQL_URL}. */
-  graphqlUrl?: string;
   /** Pre-obtained GraphQL access token; skips the `SignIn` round-trip. */
   accessToken?: string;
 }
@@ -71,13 +68,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
   return {
     username,
     password,
-    baseUrl:
-      overrides.baseUrl ?? process.env.HOLDSPORT_BASE_URL ?? DEFAULT_BASE_URL,
     teamId: overrides.teamId ?? process.env.HOLDSPORT_TEAM_ID,
-    graphqlUrl:
-      overrides.graphqlUrl ??
-      process.env.HOLDSPORT_GRAPHQL_URL ??
-      DEFAULT_GRAPHQL_URL,
     accessToken: overrides.accessToken ?? process.env.HOLDSPORT_ACCESS_TOKEN,
   };
 }
@@ -333,7 +324,7 @@ export class HoldsportClient {
     const url = new URL(
       path.startsWith("http")
         ? path
-        : `${this.config.baseUrl}/${path.replace(/^\/+/, "")}`,
+        : `${DEFAULT_BASE_URL}/${path.replace(/^\/+/, "")}`,
     );
     for (const [key, value] of Object.entries(query ?? {})) {
       if (value !== undefined) url.searchParams.set(key, String(value));
@@ -558,7 +549,7 @@ export class HoldsportClient {
     variables: Record<string, unknown> = {},
     opts: { authenticated?: boolean } = {},
   ): Promise<Record<string, unknown>> {
-    const url = this.config.graphqlUrl ?? DEFAULT_GRAPHQL_URL;
+    const url = DEFAULT_GRAPHQL_URL;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Accept: "application/json",
@@ -610,12 +601,10 @@ export class HoldsportClient {
   private async accessToken(): Promise<string> {
     if (this.config.accessToken) return this.config.accessToken;
 
-    // Key the cache by endpoint + username, so a token minted for one set of
+    // Key the cache by username, so a token minted for one set of
     // credentials is never served to a different login within the process.
-    const url = this.config.graphqlUrl ?? DEFAULT_GRAPHQL_URL;
     const username = this.config.username;
-    const key = `${url} ${username}`;
-    const cached = accessTokenCache.get(key);
+    const cached = accessTokenCache.get(username);
     if (cached) return cached;
     // TODO: no token-expiry handling. A cached token can go stale mid-session,
     // and the API signals that with a null `current_user` / null `data` rather
@@ -636,7 +625,7 @@ export class HoldsportClient {
           "(not email / member number) — check HOLDSPORT_USERNAME / --user.",
       );
     }
-    accessTokenCache.set(key, token);
+    accessTokenCache.set(username, token);
     return token;
   }
 

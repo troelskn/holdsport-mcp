@@ -61,7 +61,7 @@ Minted tokens are cached in-process, keyed by login — so the long-lived MCP se
 
 The MCP server is **read-only** — every tool maps to a specific read, with no raw request/path escape hatch, so an agent driving it can never reach an unintended endpoint or modify Holdsport data. The chat/email tools are GraphQL reads only (`SignIn` authenticates but writes nothing, and no generic GraphQL tool is exposed), so the guarantee holds there too.
 
-Credentials are passed on **every tool call**: each tool takes `username` and `password` arguments (plus optional `team_id` and `base_url`), and a fresh client is built per call. The server itself takes no arguments and holds no credentials — the MCP host supplies them with each invocation.
+Credentials are passed on **every tool call**: each tool takes `username` and `password` arguments (team-scoped tools also take `team_id`), and a fresh client is built per call. The server itself takes no arguments and holds no credentials — the MCP host supplies them with each invocation.
 
 ```sh
 bun bin/holdsport-mcp

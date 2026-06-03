@@ -10,7 +10,6 @@ import {
 const baseConfig: Config = {
   username: "u",
   password: "p",
-  baseUrl: "https://api.example.test/v1",
   teamId: "99",
 };
 
@@ -28,7 +27,6 @@ describe("loadConfig", () => {
   const ENV_KEYS = [
     "HOLDSPORT_USERNAME",
     "HOLDSPORT_PASSWORD",
-    "HOLDSPORT_BASE_URL",
     "HOLDSPORT_TEAM_ID",
   ] as const;
   let saved: Record<string, string | undefined>;
@@ -53,7 +51,7 @@ describe("loadConfig", () => {
     expect(() => loadConfig()).toThrow(/Missing credentials/);
   });
 
-  it("reads credentials from the environment and defaults the base URL", () => {
+  it("reads credentials from the environment", () => {
     process.env.HOLDSPORT_USERNAME = "envuser";
     process.env.HOLDSPORT_PASSWORD = "envpass";
     process.env.HOLDSPORT_TEAM_ID = "42";
@@ -61,7 +59,6 @@ describe("loadConfig", () => {
     expect(c.username).toBe("envuser");
     expect(c.password).toBe("envpass");
     expect(c.teamId).toBe("42");
-    expect(c.baseUrl).toBe("https://api.holdsport.dk/v1");
   });
 
   it("lets overrides win over the environment", () => {
@@ -71,12 +68,10 @@ describe("loadConfig", () => {
       username: "argu",
       password: "argp",
       teamId: "7",
-      baseUrl: "https://x",
     });
     expect(c.username).toBe("argu");
     expect(c.password).toBe("argp");
     expect(c.teamId).toBe("7");
-    expect(c.baseUrl).toBe("https://x");
   });
 });
 
@@ -102,7 +97,7 @@ describe("REST transport (exercised via the read methods)", () => {
     const data = await new HoldsportClient(baseConfig).listTeams();
     expect(data).toEqual({ ok: true });
     expect(seenMethod).toBe("GET"); // read-only: the REST transport only does GET
-    expect(seenUrl).toBe("https://api.example.test/v1/teams");
+    expect(seenUrl).toBe("https://api.holdsport.dk/v1/teams");
     expect(seenAuth).toBe(`Basic ${Buffer.from("u:p").toString("base64")}`);
   });
 
@@ -245,10 +240,7 @@ describe("HoldsportClient.headcount", () => {
 
 // --- Chat (GraphQL) --------------------------------------------------------
 
-const chatConfig: Config = {
-  ...baseConfig,
-  graphqlUrl: "https://gql.example.test/graphql",
-};
+const chatConfig: Config = { ...baseConfig };
 
 const CHAT_ROOMS = [
   {

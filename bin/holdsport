@@ -39,9 +39,6 @@ import {
   rosterTable,
 } from "../src/render.ts";
 
-const DEFAULT_BASE_URL = "https://api.holdsport.dk/v1";
-const DEFAULT_GRAPHQL_URL = "https://www.holdsport.dk/graphql";
-
 function print(data: unknown): void {
   console.log(typeof data === "string" ? data : JSON.stringify(data, null, 2));
 }
@@ -145,8 +142,6 @@ Environment:
   HOLDSPORT_USERNAME      Holdsport login username (not email/member no.)
   HOLDSPORT_PASSWORD      Holdsport password
   HOLDSPORT_TEAM_ID       Default team id for team-scoped commands
-  HOLDSPORT_BASE_URL      Override REST API base URL (default: ${DEFAULT_BASE_URL})
-  HOLDSPORT_GRAPHQL_URL   Override GraphQL endpoint (default: ${DEFAULT_GRAPHQL_URL})
   HOLDSPORT_ACCESS_TOKEN  Pre-obtained GraphQL token (skips SignIn)
 `;
 
