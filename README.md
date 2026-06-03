@@ -40,6 +40,8 @@ bun bin/holdsport chat <room_id> --limit 20
 
 Team-scoped commands default to `HOLDSPORT_TEAM_ID`; override per call with `--team <id>`. Output is human-readable by default; add `--json` (the `roster` command also has `--csv`). The CLI keeps the full escape hatch, including the write-capable `request <METHOD> <path> [json]`.
 
+Credentials default to the environment but can be overridden per call with `--user <login>` / `--pass <password>` — `--user` applies to chat as well, overriding `HOLDSPORT_CHAT_USERNAME`.
+
 ### Chat (GraphQL)
 
 Chat is **not** part of the REST API — it lives on a separate GraphQL endpoint (`https://www.holdsport.dk/graphql`) with its own auth, reverse-engineered in [`CHAT_API.md`](CHAT_API.md). The client handles this transparently: it sends the required `X-App-Version` header, runs a `SignIn` mutation to mint a token, and reuses it for the read queries. The `chats` / `chat` commands and tools are the only GraphQL surface, and both are read-only.

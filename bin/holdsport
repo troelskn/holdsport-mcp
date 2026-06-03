@@ -111,6 +111,9 @@ Usage:
 Team-scoped commands use HOLDSPORT_TEAM_ID by default; override with --team <id>.
 Output is human-readable by default; add --json for raw JSON (roster also has --csv).
 
+Credentials default to the environment (below); override per call with
+--user <login> / --pass <password> (--user applies to chat too, overriding HOLDSPORT_CHAT_USERNAME).
+
 Read commands:
   teams                       List the teams you belong to
   members                     List the team's members (raw JSON)
@@ -162,7 +165,18 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
-  const client = new HoldsportClient(loadConfig());
+  // Credentials normally come from the environment; these flags override them
+  // per call (handy for a one-off or a second account without touching .env).
+  // --user also overrides the chat login, so it wins over HOLDSPORT_CHAT_USERNAME.
+  const flag = (v: string | number | undefined) =>
+    v === undefined ? undefined : String(v);
+  const client = new HoldsportClient(
+    loadConfig({
+      username: flag(flags.user),
+      password: flag(flags.pass),
+      chatUsername: flag(flags.user),
+    }),
+  );
 
   switch (command) {
     case "teams":
@@ -288,7 +302,8 @@ async function main(argv: string[]): Promise<void> {
 
     case "get": {
       const path = need(positional, 0, "path");
-      const { json: _json, ...query } = flags;
+      // Drop output + credential flags so they don't leak in as query params.
+      const { json: _json, user: _user, pass: _pass, ...query } = flags;
       return output(await client.get(path, query), flags);
     }
 
