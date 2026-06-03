@@ -31,19 +31,19 @@ export const DEFAULT_GRAPHQL_URL = "https://www.holdsport.dk/graphql";
 const APP_VERSION = "8.0.199";
 
 export interface Config {
+  /**
+   * Holdsport login username, used for both REST (Basic auth) and GraphQL
+   * (chat/email `SignIn`). It must be the *login username* — not the email and
+   * not the member number — because chat only accepts that form (REST accepts
+   * any of the three).
+   */
   username: string;
   password: string;
   baseUrl: string;
   /** Default team for team-scoped calls when no explicit id is given. */
   teamId?: string;
-  /** GraphQL (chat) endpoint. Defaults to {@link DEFAULT_GRAPHQL_URL}. */
+  /** GraphQL (chat/email) endpoint. Defaults to {@link DEFAULT_GRAPHQL_URL}. */
   graphqlUrl?: string;
-  /**
-   * Login username for the GraphQL `SignIn` (chat). Must be the *login
-   * username* — not the email and not the member number — which can differ
-   * from the REST `username`. Falls back to `username` when unset.
-   */
-  chatUsername?: string;
   /** Pre-obtained GraphQL access token; skips the `SignIn` round-trip. */
   accessToken?: string;
 }
@@ -78,7 +78,6 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
       overrides.graphqlUrl ??
       process.env.HOLDSPORT_GRAPHQL_URL ??
       DEFAULT_GRAPHQL_URL,
-    chatUsername: overrides.chatUsername ?? process.env.HOLDSPORT_CHAT_USERNAME,
     accessToken: overrides.accessToken ?? process.env.HOLDSPORT_ACCESS_TOKEN,
   };
 }
@@ -619,10 +618,10 @@ export class HoldsportClient {
   private async accessToken(): Promise<string> {
     if (this.config.accessToken) return this.config.accessToken;
 
-    // Key the cache by endpoint + resolved login, so a token minted for one set
-    // of credentials is never served to a different login within the process.
+    // Key the cache by endpoint + username, so a token minted for one set of
+    // credentials is never served to a different login within the process.
     const url = this.config.graphqlUrl ?? DEFAULT_GRAPHQL_URL;
-    const username = this.config.chatUsername ?? this.config.username;
+    const username = this.config.username;
     const key = `${url} ${username}`;
     const cached = accessTokenCache.get(key);
     if (cached) return cached;
@@ -641,8 +640,8 @@ export class HoldsportClient {
     const token = (data.SignIn as { access_token?: string } | null)?.access_token;
     if (!token) {
       throw new Error(
-        "SignIn returned no access_token. Chat uses the login username " +
-          "(not email / member number); set it via HOLDSPORT_CHAT_USERNAME / chat_username.",
+        "SignIn returned no access_token. Chat/email needs the login username " +
+          "(not email / member number) — check HOLDSPORT_USERNAME / --user.",
       );
     }
     accessTokenCache.set(key, token);

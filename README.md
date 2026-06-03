@@ -22,11 +22,12 @@ Credentials come from the environment (Bun auto-loads `.env`):
 
 ```sh
 # .env
-HOLDSPORT_USERNAME=you@example.com
+HOLDSPORT_USERNAME=your-login   # login username (not email/member no.), see below
 HOLDSPORT_PASSWORD=your-password
-HOLDSPORT_TEAM_ID=37141        # default team for team-scoped commands
-HOLDSPORT_CHAT_USERNAME=you    # login username for chat, if different (see Chat)
+HOLDSPORT_TEAM_ID=37141         # default team for team-scoped commands
 ```
+
+One login username is used everywhere. REST Basic auth accepts your email, member number, or login username, but **chat/email only accepts the login username** — so set `HOLDSPORT_USERNAME` to that and it works for all commands.
 
 ```sh
 bun bin/holdsport help
@@ -42,7 +43,7 @@ bun bin/holdsport email <email_id>
 
 Team-scoped commands default to `HOLDSPORT_TEAM_ID`; override per call with `--team <id>`. Output is human-readable by default; add `--json` (the `roster` command also has `--csv`). The CLI keeps the full escape hatch, including the write-capable `request <METHOD> <path> [json]`.
 
-Credentials default to the environment but can be overridden per call with `--user <login>` / `--pass <password>` — `--user` applies to chat as well, overriding `HOLDSPORT_CHAT_USERNAME`.
+Credentials default to the environment but can be overridden per call with `--user <login>` / `--pass <password>` (the login username covers REST and chat/email alike).
 
 ### Chat & email (GraphQL)
 
@@ -52,7 +53,7 @@ Chat and email are **not** part of the REST API — they live on a separate Grap
 
 `emails` lists your inbox most-recent first (subject, sender, date, read state; `--sent` for the sent box); `email <id>` shows one email's body and attachments. Note that bulk-email bodies are stored as HTML, so `email` content may contain HTML and merge placeholders like `{{ fornavn }}`.
 
-One wrinkle: `SignIn` wants the **login username** (e.g. `troelsknaknielsen`), which is *not* the email used for REST Basic auth and may resolve to a different linked account. Set `HOLDSPORT_CHAT_USERNAME` when it differs from `HOLDSPORT_USERNAME`. To skip `SignIn` entirely, supply a token via `HOLDSPORT_ACCESS_TOKEN`.
+`SignIn` requires the **login username** (e.g. `troelsknaknielsen`) — not the email or member number. Since REST Basic auth also accepts the login username, a single `HOLDSPORT_USERNAME` set to it works for every command. To skip `SignIn` entirely, supply a token via `HOLDSPORT_ACCESS_TOKEN`.
 
 Minted tokens are cached in-process, keyed by login — so the long-lived MCP server can serve multiple users without ever handing one login's token to another, and repeat chat calls skip re-authenticating.
 

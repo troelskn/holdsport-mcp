@@ -245,7 +245,6 @@ describe("HoldsportClient.headcount", () => {
 const chatConfig: Config = {
   ...baseConfig,
   graphqlUrl: "https://gql.example.test/graphql",
-  chatUsername: "loginname",
 };
 
 const CHAT_ROOMS = [
@@ -445,12 +444,12 @@ describe("HoldsportClient chat (GraphQL)", () => {
     expect(spy.signIns()).toBe(1);
   });
 
-  it("caches across client instances but keys by login username", async () => {
+  it("caches across client instances but keys by username", async () => {
     const spy = stubGraphql();
     // Two distinct logins each sign in; reusing a login hits the shared cache.
-    await new HoldsportClient({ ...chatConfig, chatUsername: "alice" }).listChatRooms();
-    await new HoldsportClient({ ...chatConfig, chatUsername: "bob" }).listChatRooms();
-    await new HoldsportClient({ ...chatConfig, chatUsername: "alice" }).listChatRooms();
+    await new HoldsportClient({ ...chatConfig, username: "alice" }).listChatRooms();
+    await new HoldsportClient({ ...chatConfig, username: "bob" }).listChatRooms();
+    await new HoldsportClient({ ...chatConfig, username: "alice" }).listChatRooms();
     expect(spy.signIns()).toBe(2); // alice + bob; the second alice is a cache hit
   });
 

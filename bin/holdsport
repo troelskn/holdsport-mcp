@@ -114,7 +114,7 @@ Team-scoped commands use HOLDSPORT_TEAM_ID by default; override with --team <id>
 Output is human-readable by default; add --json for raw JSON (roster also has --csv).
 
 Credentials default to the environment (below); override per call with
---user <login> / --pass <password> (--user applies to chat too, overriding HOLDSPORT_CHAT_USERNAME).
+--user <login> / --pass <password>. Use the login username (not email/member number) so chat works too.
 
 Read commands:
   teams                       List the teams you belong to
@@ -132,7 +132,7 @@ Read commands:
   user                        Show the current user profile
   profiles                    List managed profiles
 
-Chat & email (GraphQL — uses the login username, see HOLDSPORT_CHAT_USERNAME):
+Chat & email (GraphQL — same login as everything else):
   chats                       List your chat rooms
   chat <room_id>              Show a room's messages (flags: --limit N)
   emails                      List your inbox (flags: --sent, --limit N)
@@ -146,11 +146,10 @@ Other:
   help                        Show this help
 
 Environment:
-  HOLDSPORT_USERNAME      Holdsport login (email) for the REST API
+  HOLDSPORT_USERNAME      Holdsport login username (used for REST + chat/email; not email/member no.)
   HOLDSPORT_PASSWORD      Holdsport password
   HOLDSPORT_TEAM_ID       Default team id for team-scoped commands
   HOLDSPORT_BASE_URL      Override REST API base URL (default: ${DEFAULT_BASE_URL})
-  HOLDSPORT_CHAT_USERNAME Login username for chat (if different from the REST login)
   HOLDSPORT_GRAPHQL_URL   Override GraphQL endpoint (default: ${DEFAULT_GRAPHQL_URL})
   HOLDSPORT_ACCESS_TOKEN  Pre-obtained GraphQL token (skips SignIn)
 `;
@@ -171,14 +170,12 @@ async function main(argv: string[]): Promise<void> {
 
   // Credentials normally come from the environment; these flags override them
   // per call (handy for a one-off or a second account without touching .env).
-  // --user also overrides the chat login, so it wins over HOLDSPORT_CHAT_USERNAME.
   const flag = (v: string | number | undefined) =>
     v === undefined ? undefined : String(v);
   const client = new HoldsportClient(
     loadConfig({
       username: flag(flags.user),
       password: flag(flags.pass),
-      chatUsername: flag(flags.user),
     }),
   );
 

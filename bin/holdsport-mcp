@@ -63,8 +63,6 @@ function clientFor(a: Auth): HoldsportClient {
     baseUrl: a.base_url ?? DEFAULT_BASE_URL,
     teamId: a.team_id,
     graphqlUrl: a.graphql_url ?? DEFAULT_GRAPHQL_URL,
-    // Chat tools pass the login username as `username`, so chatUsername can
-    // default to it.
     accessToken: a.access_token,
   });
 }
