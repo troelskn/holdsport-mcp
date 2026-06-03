@@ -29,6 +29,8 @@ import {
   type Query,
 } from "../src/client.ts";
 import {
+  renderActivities,
+  renderActivity,
   renderChatRooms,
   renderChatTranscript,
   renderEmail,
@@ -134,6 +136,11 @@ Chat & email:
   chat <room_id>              Show a room's messages (flags: --limit N)
   emails                      List your inbox (flags: --sent, --limit N)
   email <email_id>            Show a single email (subject, body, attachments)
+
+Activities — richer GraphQL versions (experimental; may replace the REST ones):
+  gql-activities [date]       Upcoming activities: type, place, sign-up count
+                                flags: --team id, --page N
+  gql-activity <activity_id>  One activity + attendance breakdown (flags: --names)
 
 Other:
   help                        Show this help
@@ -306,6 +313,23 @@ async function main(argv: string[]): Promise<void> {
       const email = await client.getEmail(emailId);
       if (flags.json) return print(email);
       return console.log(renderEmail(email));
+    }
+
+    case "gql-activities": {
+      const rows = await client.listActivitiesRich({
+        teamId: teamOf(flags),
+        date: positional[0],
+        page: flags.page !== undefined ? Number(flags.page) : undefined,
+      });
+      if (flags.json) return print(rows);
+      return console.log(renderActivities(rows));
+    }
+
+    case "gql-activity": {
+      const activityId = need(positional, 0, "activity_id");
+      const detail = await client.activityRich(activityId);
+      if (flags.json) return print(detail);
+      return console.log(renderActivity(detail, { names: Boolean(flags.names) }));
     }
 
     default:

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 
 import type {
+  ActivityDetail,
+  ActivitySummary,
   ChatRoomDetail,
   ChatRoomSummary,
   EmailDetail,
@@ -12,6 +14,8 @@ import {
   cell,
   csvField,
   isScalar,
+  renderActivities,
+  renderActivity,
   renderChatRooms,
   renderChatTranscript,
   renderEmail,
@@ -286,5 +290,84 @@ describe("renderEmail", () => {
     expect(out).toContain("Status: unread");
     expect(out).toContain("@ agenda.pdf  https://files/agenda.pdf");
     expect(out).toContain("Hello\nteam");
+  });
+});
+
+describe("renderActivities", () => {
+  const rows: ActivitySummary[] = [
+    {
+      id: 1,
+      name: "Træning",
+      time: "2026-06-04T16:10:00+02:00",
+      end_time: "2026-06-04T17:40:00+02:00",
+      place: "Hallen",
+      event_type: "Træning",
+      is_cancelled: false,
+      attendee_count: 22,
+    },
+    {
+      id: 2,
+      name: "Match",
+      time: "2026-06-05T18:00:00+02:00",
+      end_time: "",
+      place: "Away",
+      event_type: "Kamp",
+      is_cancelled: true,
+      attendee_count: 12,
+    },
+  ];
+
+  it("renders a row per activity with type, place, count, and a cancel marker", () => {
+    const out = renderActivities(rows);
+    expect(out).toContain("Træning");
+    expect(out).toContain("Hallen");
+    expect(out).toContain("22");
+    expect(out).toContain("✗ Match"); // cancelled marker
+    expect(out).toContain("2 activities");
+  });
+
+  it("handles an empty list", () => {
+    expect(renderActivities([])).toBe("(no activities)");
+  });
+});
+
+describe("renderActivity", () => {
+  const detail: ActivityDetail = {
+    id: 7,
+    name: "Sommertræning",
+    time: "2026-06-04T16:10:00+02:00",
+    end_time: "2026-06-04T17:40:00+02:00",
+    place: "Rødovre",
+    comment: "Husk drikkedunk",
+    event_type: "Træning",
+    is_cancelled: false,
+    counts: { attending: 3, players: 2, coaches: 1, max: 999 },
+    attendance: {
+      attending_players: ["Bo Berg", "Cy Cohen"],
+      attending_coaches: ["Coach Ann"],
+      not_attending: ["Dee Day"],
+      no_answer: [],
+    },
+    waiting_list: 2,
+    tasks: 1,
+  };
+
+  it("renders header and tally without names by default", () => {
+    const out = renderActivity(detail);
+    expect(out).toContain("# Sommertræning");
+    expect(out).toContain("When:  04-06-2026 16:10 – 04-06-2026 17:40");
+    expect(out).toContain("Attending:     3  (2 players, 1 coaches)");
+    expect(out).toContain("Not attending: 1");
+    expect(out).toContain("Waiting list:  2");
+    expect(out).not.toContain("- Bo Berg"); // names hidden by default
+  });
+
+  it("lists the named buckets when asked", () => {
+    const out = renderActivity(detail, { names: true });
+    expect(out).toContain("Attending — players (2):");
+    expect(out).toContain("  - Bo Berg");
+    expect(out).toContain("Not attending (1):");
+    expect(out).toContain("  - Dee Day");
+    expect(out).not.toContain("No answer ("); // empty bucket omitted
   });
 });

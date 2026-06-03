@@ -165,6 +165,48 @@ export interface EmailDetail {
   attachments: EmailAttachment[];
 }
 
+// --- Rich (GraphQL) activities ---------------------------------------------
+// An experimental, richer take on activities/attendance than the REST
+// `listActivities`/`getActivity`/`headcount`. Exposed under the `gql-*` names so
+// it can be evaluated alongside the REST set before replacing it.
+
+/** An activity as shown in the rich list, shaped for humans. */
+export interface ActivitySummary {
+  id: number;
+  name: string;
+  /** ISO-8601 start timestamp. */
+  time: string;
+  /** ISO-8601 end timestamp. */
+  end_time: string;
+  place: string;
+  event_type: string;
+  is_cancelled: boolean;
+  /** How many have signed up (players + coaches). */
+  attendee_count: number;
+}
+
+/** A single activity with its full attendance breakdown, shaped for humans. */
+export interface ActivityDetail {
+  id: number;
+  name: string;
+  time: string;
+  end_time: string;
+  place: string;
+  comment: string;
+  event_type: string;
+  is_cancelled: boolean;
+  counts: { attending: number; players: number; coaches: number; max: number };
+  /** Names in each attendance bucket. */
+  attendance: {
+    attending_players: string[];
+    attending_coaches: string[];
+    not_attending: string[];
+    no_answer: string[];
+  };
+  waiting_list: number;
+  tasks: number;
+}
+
 /** Mint an access token from a login username + password. */
 const SIGN_IN = `mutation SignIn($username: String, $password: String) {
   SignIn(input: { username: $username, password: $password }) {
@@ -285,6 +327,73 @@ interface RawEmail {
   attachment2_url?: string | null;
   attachment3_name?: string | null;
   attachment3_url?: string | null;
+}
+
+/** Per-activity fields shared by the rich list and detail queries. */
+const ACTIVITY_FIELDS = `
+    id
+    name
+    place
+    is_cancelled
+    starttime { iso8601 }
+    endtime { iso8601 }
+    event_type { name }
+    attendee_count`;
+
+/**
+ * The team's upcoming activities, paginated and grouped by the server. We read
+ * `future_activities_groups` (from `filter_start_date` onward) and flatten it.
+ */
+const LIST_ACTIVITIES = `query ListActivities($team: String, $start: String, $page: Int) {
+  activities_page(team_id: $team, filter_start_date: $start, page: $page) {
+    current_page
+    future_activities_groups {
+      activities {${ACTIVITY_FIELDS}
+      }
+    }
+  }
+}`;
+
+/** A single activity with its full attendance breakdown. */
+const SHOW_ACTIVITY = `query ShowActivity($id: Int!) {
+  activity(id: $id) {${ACTIVITY_FIELDS}
+    comment
+    player_count
+    coach_count
+    max_attender
+    attending_players { id name }
+    attending_coaches { id name }
+    non_attendees { id name }
+    users_with_no_rsvp { id name }
+    wait_list_entries { id }
+    custom_tasks { id }
+  }
+}`;
+
+/** Raw GraphQL shape of an activity row, before shaping. */
+interface RawActivity {
+  id: number;
+  name?: string;
+  place?: string;
+  is_cancelled?: boolean;
+  starttime?: { iso8601?: string } | null;
+  endtime?: { iso8601?: string } | null;
+  event_type?: { name?: string } | null;
+  attendee_count?: number;
+}
+
+/** Raw GraphQL shape of the rich activity detail, before shaping. */
+interface RawActivityDetail extends RawActivity {
+  comment?: string;
+  player_count?: number;
+  coach_count?: number;
+  max_attender?: number;
+  attending_players?: Array<{ name?: string }> | null;
+  attending_coaches?: Array<{ name?: string }> | null;
+  non_attendees?: Array<{ name?: string }> | null;
+  users_with_no_rsvp?: Array<{ name?: string }> | null;
+  wait_list_entries?: Array<{ id: number }> | null;
+  custom_tasks?: Array<{ id: number }> | null;
 }
 
 /**
@@ -774,6 +883,83 @@ export class HoldsportClient {
       has_been_read: e.has_been_read ?? false,
       content: e.content ?? "",
       attachments,
+    };
+  }
+
+  // --- Rich (GraphQL) activities -------------------------------------------
+
+  /**
+   * The team's upcoming activities (GraphQL), one page at a time, from `date`
+   * onward (defaults to today). Richer per-row than the REST `listActivities`:
+   * event type, place, and a live attendee count.
+   */
+  async listActivitiesRich(
+    opts: { teamId?: string; date?: string; page?: number } = {},
+  ): Promise<ActivitySummary[]> {
+    const team = this.resolveTeam(opts.teamId);
+    const start = opts.date ?? new Date().toISOString().slice(0, 10);
+    const data = await this.graphql(LIST_ACTIVITIES, {
+      team,
+      start,
+      page: opts.page ?? 1,
+    });
+    const page = data.activities_page as {
+      future_activities_groups?: Array<{ activities?: RawActivity[] }>;
+    } | null;
+
+    return (page?.future_activities_groups ?? [])
+      .flatMap((g) => g.activities ?? [])
+      .map(
+        (a): ActivitySummary => ({
+          id: a.id,
+          name: (a.name ?? "").trim(),
+          time: a.starttime?.iso8601 ?? "",
+          end_time: a.endtime?.iso8601 ?? "",
+          place: (a.place ?? "").trim(),
+          event_type: (a.event_type?.name ?? "").trim(),
+          is_cancelled: a.is_cancelled ?? false,
+          attendee_count: a.attendee_count ?? 0,
+        }),
+      )
+      .sort((a, b) => a.time.localeCompare(b.time));
+  }
+
+  /**
+   * A single activity with its full attendance breakdown (GraphQL). Subsumes the
+   * REST `getActivity` + `listAttendees` + `headcount`: it returns the named
+   * attending / not-attending / no-answer lists plus the counts.
+   */
+  async activityRich(activityId: string | number): Promise<ActivityDetail> {
+    const data = await this.graphql(SHOW_ACTIVITY, { id: Number(activityId) });
+    const a = data.activity as RawActivityDetail | null;
+    if (!a) throw new Error(`activity ${activityId} not found`);
+
+    const names = (list?: Array<{ name?: string }> | null) =>
+      (list ?? []).map((u) => (u.name ?? "").trim()).filter((n) => n);
+
+    return {
+      id: a.id,
+      name: (a.name ?? "").trim(),
+      time: a.starttime?.iso8601 ?? "",
+      end_time: a.endtime?.iso8601 ?? "",
+      place: (a.place ?? "").trim(),
+      comment: (a.comment ?? "").trim(),
+      event_type: (a.event_type?.name ?? "").trim(),
+      is_cancelled: a.is_cancelled ?? false,
+      counts: {
+        attending: a.attendee_count ?? 0,
+        players: a.player_count ?? 0,
+        coaches: a.coach_count ?? 0,
+        max: a.max_attender ?? 0,
+      },
+      attendance: {
+        attending_players: names(a.attending_players),
+        attending_coaches: names(a.attending_coaches),
+        not_attending: names(a.non_attendees),
+        no_answer: names(a.users_with_no_rsvp),
+      },
+      waiting_list: (a.wait_list_entries ?? []).length,
+      tasks: (a.custom_tasks ?? []).length,
     };
   }
 }

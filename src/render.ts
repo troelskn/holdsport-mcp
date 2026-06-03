@@ -7,6 +7,8 @@
  */
 
 import type {
+  ActivityDetail,
+  ActivitySummary,
   ChatRoomDetail,
   ChatRoomSummary,
   EmailDetail,
@@ -198,6 +200,65 @@ export function renderEmail(email: EmailDetail): string {
     for (const a of email.attachments) lines.push(`  @ ${a.name}  ${a.url}`);
   }
   lines.push("", email.content || "(no content)");
+  return lines.join("\n");
+}
+
+/** Rich activities as a table: id, when, type, place, sign-ups, name. */
+export function renderActivities(rows: ActivitySummary[]): string {
+  if (rows.length === 0) return "(no activities)";
+  const clip = (s: string, n: number) =>
+    s.length > n ? `${s.slice(0, n - 1)}…` : s;
+  const body = table(
+    ["Id", "When", "Type", "Place", "#", "Name"],
+    rows.map((r) => [
+      String(r.id),
+      cell(r.time),
+      clip(r.event_type, 16),
+      clip(r.place, 18),
+      String(r.attendee_count),
+      (r.is_cancelled ? "✗ " : "") + clip(r.name || "(unnamed)", 30),
+    ]),
+  );
+  return `${body}\n\n${rows.length} activities`;
+}
+
+/**
+ * A rich activity: a header, a sign-up tally, and — when `names` is set — the
+ * named attending / not-attending / no-answer lists.
+ */
+export function renderActivity(
+  a: ActivityDetail,
+  opts: { names?: boolean } = {},
+): string {
+  const when = a.end_time ? `${cell(a.time)} – ${cell(a.end_time)}` : cell(a.time);
+  const lines = [
+    `# ${a.name || "(unnamed)"}${a.is_cancelled ? "  (CANCELLED)" : ""}`,
+    `When:  ${when}`,
+    `Type:  ${a.event_type || "—"}`,
+    `Place: ${a.place || "—"}`,
+  ];
+  if (a.comment) lines.push(`Note:  ${a.comment.replace(/\s+/g, " ").trim()}`);
+
+  lines.push(
+    "",
+    `Attending:     ${a.counts.attending}  (${a.counts.players} players, ${a.counts.coaches} coaches)`,
+    `Not attending: ${a.attendance.not_attending.length}`,
+    `No answer:     ${a.attendance.no_answer.length}`,
+  );
+  if (a.waiting_list) lines.push(`Waiting list:  ${a.waiting_list}`);
+  if (a.tasks) lines.push(`Tasks:         ${a.tasks}`);
+
+  if (opts.names) {
+    const block = (label: string, names: string[]) => {
+      if (names.length === 0) return;
+      lines.push("", `${label} (${names.length}):`);
+      for (const n of names) lines.push(`  - ${n}`);
+    };
+    block("Attending — players", a.attendance.attending_players);
+    block("Attending — coaches", a.attendance.attending_coaches);
+    block("Not attending", a.attendance.not_attending);
+    block("No answer", a.attendance.no_answer);
+  }
   return lines.join("\n");
 }
 

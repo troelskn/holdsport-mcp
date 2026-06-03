@@ -314,6 +314,8 @@ function stubGraphql(
     received?: unknown;
     sent?: unknown;
     email?: unknown;
+    activityGroups?: unknown;
+    activity?: unknown;
   } = {},
 ): {
   signIns: () => number;
@@ -351,6 +353,19 @@ function stubGraphql(
     }
     if (body.query.includes("email(id:")) {
       return json({ data: { email: opts.email ?? null } });
+    }
+    if (body.query.includes("activities_page")) {
+      return json({
+        data: {
+          activities_page: {
+            current_page: 1,
+            future_activities_groups: opts.activityGroups ?? [],
+          },
+        },
+      });
+    }
+    if (body.query.includes("activity(id:")) {
+      return json({ data: { activity: opts.activity ?? null } });
     }
     return json({});
   });
@@ -593,5 +608,113 @@ describe("HoldsportClient email (GraphQL)", () => {
     await expect(new HoldsportClient(chatConfig).getEmail(999)).rejects.toThrow(
       /email 999 not found/,
     );
+  });
+});
+
+describe("HoldsportClient rich activities (GraphQL)", () => {
+  let originalFetch: typeof fetch;
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    clearChatTokenCache();
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    clearChatTokenCache();
+  });
+
+  it("flattens the activity groups and shapes + sorts rows by time", async () => {
+    const spy = stubGraphql({
+      activityGroups: [
+        {
+          activities: [
+            {
+              id: 2,
+              name: "Match",
+              place: "Away",
+              is_cancelled: true,
+              starttime: { iso8601: "2026-06-05T18:00:00+02:00" },
+              endtime: { iso8601: "2026-06-05T20:00:00+02:00" },
+              event_type: { name: "Kamp" },
+              attendee_count: 12,
+            },
+          ],
+        },
+        {
+          activities: [
+            {
+              id: 1,
+              name: "Træning ",
+              place: "Hallen",
+              is_cancelled: false,
+              starttime: { iso8601: "2026-06-04T16:10:00+02:00" },
+              endtime: { iso8601: "2026-06-04T17:40:00+02:00" },
+              event_type: { name: "Træning" },
+              attendee_count: 22,
+            },
+          ],
+        },
+      ],
+    });
+    const rows = await new HoldsportClient(chatConfig).listActivitiesRich({
+      teamId: "37141",
+      date: "2026-06-03",
+    });
+    expect(rows.map((r) => r.id)).toEqual([1, 2]); // sorted by time, across groups
+    expect(rows[0]).toEqual({
+      id: 1,
+      name: "Træning",
+      time: "2026-06-04T16:10:00+02:00",
+      end_time: "2026-06-04T17:40:00+02:00",
+      place: "Hallen",
+      event_type: "Træning",
+      is_cancelled: false,
+      attendee_count: 22,
+    });
+    expect(rows[1].is_cancelled).toBe(true);
+    // the paginated activities query was issued
+    expect(
+      spy.requests().some((r) => r.query.includes("activities_page")),
+    ).toBe(true);
+  });
+
+  it("shapes the attendance breakdown and counts", async () => {
+    stubGraphql({
+      activity: {
+        id: 7,
+        name: "Sommertræning",
+        place: "Rødovre",
+        comment: "Husk drikkedunk",
+        is_cancelled: false,
+        starttime: { iso8601: "2026-06-04T16:10:00+02:00" },
+        endtime: { iso8601: "2026-06-04T17:40:00+02:00" },
+        event_type: { name: "Træning" },
+        attendee_count: 3,
+        player_count: 2,
+        coach_count: 1,
+        max_attender: 999,
+        attending_players: [{ name: "Bo Berg #6" }, { name: "Cy Cohen " }],
+        attending_coaches: [{ name: "Coach Ann" }],
+        non_attendees: [{ name: "Dee Day" }],
+        users_with_no_rsvp: [],
+        wait_list_entries: [{ id: 1 }, { id: 2 }],
+        custom_tasks: [{ id: 9 }],
+      },
+    });
+    const a = await new HoldsportClient(chatConfig).activityRich("7");
+    expect(a.counts).toEqual({ attending: 3, players: 2, coaches: 1, max: 999 });
+    expect(a.attendance.attending_players).toEqual(["Bo Berg #6", "Cy Cohen"]);
+    expect(a.attendance.attending_coaches).toEqual(["Coach Ann"]);
+    expect(a.attendance.not_attending).toEqual(["Dee Day"]);
+    expect(a.attendance.no_answer).toEqual([]);
+    expect(a.waiting_list).toBe(2);
+    expect(a.tasks).toBe(1);
+    expect(a.comment).toBe("Husk drikkedunk");
+  });
+
+  it("throws when the activity is not found", async () => {
+    stubGraphql({ activity: null });
+    await expect(
+      new HoldsportClient(chatConfig).activityRich(404),
+    ).rejects.toThrow(/activity 404 not found/);
   });
 });

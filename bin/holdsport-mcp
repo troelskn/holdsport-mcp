@@ -304,4 +304,39 @@ tool(
   (client, a) => client.getEmail(a.email_id),
 );
 
+// Rich, GraphQL-backed activities (experimental; may replace the REST
+// activities/activity/attendees/headcount tools). Same login-username auth.
+tool(
+  "gql_activities",
+  {
+    title: "List activities (rich)",
+    description:
+      "List a team's upcoming activities (GraphQL), from `date` (YYYY-MM-DD, default today) onward, " +
+      "one page at a time: event type, place, and sign-up count per activity. " +
+      "`username` must be the login username, not the email.",
+    inputSchema: {
+      team_id: teamId,
+      date: z.string().optional().describe("Start date YYYY-MM-DD (default: today)"),
+      page: z.number().optional().describe("Page number (default: 1)"),
+    },
+  },
+  (client, a) =>
+    client.listActivitiesRich({ teamId: a.team_id, date: a.date, page: a.page }),
+);
+
+tool(
+  "gql_activity",
+  {
+    title: "Activity detail + attendance (rich)",
+    description:
+      "Show one activity (GraphQL) with its full attendance breakdown: counts plus the named " +
+      "attending / not-attending / no-answer lists. Subsumes attendees + headcount. " +
+      "`username` must be the login username, not the email.",
+    inputSchema: {
+      activity_id: z.string().describe("Activity id"),
+    },
+  },
+  (client, a) => client.activityRich(a.activity_id),
+);
+
 await server.connect(new StdioServerTransport());
