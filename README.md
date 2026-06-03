@@ -36,17 +36,21 @@ bun bin/holdsport activities 2026-06-01
 bun bin/holdsport headcount <activity_id> --players --names
 bun bin/holdsport chats
 bun bin/holdsport chat <room_id> --limit 20
+bun bin/holdsport emails --limit 20
+bun bin/holdsport email <email_id>
 ```
 
 Team-scoped commands default to `HOLDSPORT_TEAM_ID`; override per call with `--team <id>`. Output is human-readable by default; add `--json` (the `roster` command also has `--csv`). The CLI keeps the full escape hatch, including the write-capable `request <METHOD> <path> [json]`.
 
 Credentials default to the environment but can be overridden per call with `--user <login>` / `--pass <password>` — `--user` applies to chat as well, overriding `HOLDSPORT_CHAT_USERNAME`.
 
-### Chat (GraphQL)
+### Chat & email (GraphQL)
 
-Chat is **not** part of the REST API — it lives on a separate GraphQL endpoint (`https://www.holdsport.dk/graphql`) with its own auth, reverse-engineered in [`CHAT_API.md`](CHAT_API.md). The client handles this transparently: it sends the required `X-App-Version` header, runs a `SignIn` mutation to mint a token, and reuses it for the read queries. The `chats` / `chat` commands and tools are the only GraphQL surface, and both are read-only.
+Chat and email are **not** part of the REST API — they live on a separate GraphQL endpoint (`https://www.holdsport.dk/graphql`) with its own auth, reverse-engineered in [`CHAT_API.md`](CHAT_API.md). The client handles this transparently: it sends the required `X-App-Version` header, runs a `SignIn` mutation to mint a token, and reuses it for the read queries. The `chats` / `chat` / `emails` / `email` commands and tools are the only GraphQL surface, and all are read-only.
 
 `chats` lists both your ad-hoc rooms (the ones you're directly added to) and the team-scoped rooms — team, coach, and parent chats — across all your teams, just like the app. `chat <room_id>` shows any room's transcript by id, whatever its scope.
+
+`emails` lists your inbox most-recent first (subject, sender, date, read state; `--sent` for the sent box); `email <id>` shows one email's body and attachments. Note that bulk-email bodies are stored as HTML, so `email` content may contain HTML and merge placeholders like `{{ fornavn }}`.
 
 One wrinkle: `SignIn` wants the **login username** (e.g. `troelsknaknielsen`), which is *not* the email used for REST Basic auth and may resolve to a different linked account. Set `HOLDSPORT_CHAT_USERNAME` when it differs from `HOLDSPORT_USERNAME`. To skip `SignIn` entirely, supply a token via `HOLDSPORT_ACCESS_TOKEN`.
 
@@ -81,4 +85,4 @@ The host (or the model) provides `username`/`password` with each tool call.
 
 ### Tools
 
-`teams`, `members`, `member`, `roster`, `notes`, `activities`, `activity`, `attendees`, `headcount`, `tasks`, `user`, `profiles`, `chats`, `chat`, and `get` (raw GET). Every tool requires `username` and `password`; team-scoped tools also need a `team_id`. The chat tools (`chats`, `chat`) authenticate over GraphQL, so their `username` must be the **login username**, not the email.
+`teams`, `members`, `member`, `roster`, `notes`, `activities`, `activity`, `attendees`, `headcount`, `tasks`, `user`, `profiles`, `chats`, `chat`, `emails`, `email`, and `get` (raw GET). Every tool requires `username` and `password`; team-scoped tools also need a `team_id`. The GraphQL tools (`chats`, `chat`, `emails`, `email`) authenticate over GraphQL, so their `username` must be the **login username**, not the email.

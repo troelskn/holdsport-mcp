@@ -3,6 +3,8 @@ import { describe, expect, it } from "bun:test";
 import type {
   ChatRoomDetail,
   ChatRoomSummary,
+  EmailDetail,
+  EmailSummary,
   Headcount,
   RosterEntry,
 } from "../src/client.ts";
@@ -12,6 +14,8 @@ import {
   isScalar,
   renderChatRooms,
   renderChatTranscript,
+  renderEmail,
+  renderEmails,
   renderHeadcount,
   renderHuman,
   rosterCsv,
@@ -224,5 +228,63 @@ describe("renderChatTranscript", () => {
 
   it("notes an empty room", () => {
     expect(renderChatTranscript({ ...room, messages: [] })).toContain("(no messages)");
+  });
+});
+
+describe("renderEmails", () => {
+  const emails: EmailSummary[] = [
+    {
+      id: 12,
+      subject: "Newest",
+      sender: "Admin Ann",
+      time: "2025-01-12T08:00:00+01:00",
+      has_been_read: false,
+      has_attachments: true,
+    },
+    {
+      id: 11,
+      subject: "Older",
+      sender: "Coach Bo",
+      time: "2025-01-09T10:00:00+01:00",
+      has_been_read: true,
+      has_attachments: false,
+    },
+  ];
+
+  it("renders a row per email with unread + attachment markers", () => {
+    const out = renderEmails(emails);
+    expect(out).toContain("Newest");
+    expect(out).toContain("●"); // unread marker on email 12
+    expect(out).toContain("Admin Ann");
+    expect(out).toContain("12-01-2025 08:00");
+    expect(out).toContain("2 emails");
+  });
+
+  it("handles an empty list", () => {
+    expect(renderEmails([])).toBe("(no emails)");
+  });
+});
+
+describe("renderEmail", () => {
+  const email: EmailDetail = {
+    id: 12,
+    subject: "Team update",
+    sender: "Admin Ann",
+    recipients: ["Bo Berg", "Cy Cohen"],
+    time: "2025-01-12T08:00:00+01:00",
+    has_been_read: false,
+    content: "Hello\nteam",
+    attachments: [{ name: "agenda.pdf", url: "https://files/agenda.pdf" }],
+  };
+
+  it("renders a header block then the body", () => {
+    const out = renderEmail(email);
+    expect(out).toContain("# Team update");
+    expect(out).toContain("From:  Admin Ann");
+    expect(out).toContain("Date:  12-01-2025 08:00");
+    expect(out).toContain("To:    2 recipients");
+    expect(out).toContain("Status: unread");
+    expect(out).toContain("@ agenda.pdf  https://files/agenda.pdf");
+    expect(out).toContain("Hello\nteam");
   });
 });

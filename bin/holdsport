@@ -31,6 +31,8 @@ import {
 import {
   renderChatRooms,
   renderChatTranscript,
+  renderEmail,
+  renderEmails,
   renderHeadcount,
   renderHuman,
   rosterCsv,
@@ -130,9 +132,11 @@ Read commands:
   user                        Show the current user profile
   profiles                    List managed profiles
 
-Chat (GraphQL — uses the login username, see HOLDSPORT_CHAT_USERNAME):
+Chat & email (GraphQL — uses the login username, see HOLDSPORT_CHAT_USERNAME):
   chats                       List your chat rooms
   chat <room_id>              Show a room's messages (flags: --limit N)
+  emails                      List your inbox (flags: --sent, --limit N)
+  email <email_id>            Show a single email (subject, body, attachments)
 
 Escape hatch (for undocumented / write endpoints):
   get <path> [--key val ...]      Raw GET; flags become query params
@@ -298,6 +302,23 @@ async function main(argv: string[]): Promise<void> {
       const room = await client.chatRoom(roomId, limit);
       if (flags.json) return print(room);
       return console.log(renderChatTranscript(room));
+    }
+
+    case "emails": {
+      const limit = flags.limit !== undefined ? Number(flags.limit) : undefined;
+      const emails = await client.listEmails({
+        sent: Boolean(flags.sent),
+        limit,
+      });
+      if (flags.json) return print(emails);
+      return console.log(renderEmails(emails));
+    }
+
+    case "email": {
+      const emailId = need(positional, 0, "email_id");
+      const email = await client.getEmail(emailId);
+      if (flags.json) return print(email);
+      return console.log(renderEmail(email));
     }
 
     case "get": {

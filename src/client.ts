@@ -148,6 +148,36 @@ export interface ChatRoomDetail {
   messages: ChatMessage[];
 }
 
+/** An email as shown in an inbox/sent list, shaped for humans. */
+export interface EmailSummary {
+  id: number;
+  subject: string;
+  sender: string;
+  /** ISO-8601 timestamp. */
+  time: string;
+  has_been_read: boolean;
+  has_attachments: boolean;
+}
+
+export interface EmailAttachment {
+  name: string;
+  url: string;
+}
+
+/** A single email with its body and attachments. */
+export interface EmailDetail {
+  id: number;
+  subject: string;
+  sender: string;
+  /** Recipient names (these blasts can have hundreds). */
+  recipients: string[];
+  time: string;
+  has_been_read: boolean;
+  /** Body; may contain HTML. */
+  content: string;
+  attachments: EmailAttachment[];
+}
+
 /** Mint an access token from a login username + password. */
 const SIGN_IN = `mutation SignIn($username: String, $password: String) {
   SignIn(input: { username: $username, password: $password }) {
@@ -217,6 +247,58 @@ const SHOW_CHAT_ROOM = `query ShowChatRoom($id: Int!) {
     }
   }
 }`;
+
+/** Field set shared by the inbox/sent list queries. */
+const EMAIL_SUMMARY_FIELDS = `
+    id
+    subject
+    has_been_read
+    created_at { iso8601 }
+    sender { id name }
+    attachment1_name`;
+
+/** List the current user's received or sent emails. */
+const emailListQuery = (root: "received_emails" | "sent_emails") =>
+  `query ListEmails {
+  ${root} {${EMAIL_SUMMARY_FIELDS}
+  }
+}`;
+
+/** A single email with its body and attachments. */
+const SHOW_EMAIL = `query ShowEmail($id: Int!) {
+  email(id: $id) {
+    id
+    subject
+    content
+    has_been_read
+    created_at { iso8601 }
+    sender { id name }
+    recipients { id name }
+    attachment1_name
+    attachment1_url
+    attachment2_name
+    attachment2_url
+    attachment3_name
+    attachment3_url
+  }
+}`;
+
+/** Raw GraphQL shape of an email, before shaping. */
+interface RawEmail {
+  id: number;
+  subject?: string;
+  content?: string;
+  has_been_read?: boolean;
+  created_at?: { iso8601?: string } | null;
+  sender?: { name?: string } | null;
+  recipients?: Array<{ name?: string }> | null;
+  attachment1_name?: string | null;
+  attachment1_url?: string | null;
+  attachment2_name?: string | null;
+  attachment2_url?: string | null;
+  attachment3_name?: string | null;
+  attachment3_url?: string | null;
+}
 
 /**
  * Process-level cache of GraphQL access tokens, keyed by endpoint + login
@@ -661,6 +743,63 @@ export class HoldsportClient {
       scope: room.scope ?? "",
       unread_count: room.unread_count ?? 0,
       messages: messages.map(({ ts: _ts, ...m }) => m),
+    };
+  }
+
+  /**
+   * The current user's emails, most-recent first. Reads the inbox by default,
+   * or the sent box with `sent: true`. `limit` keeps only the most recent N.
+   */
+  async listEmails(
+    opts: { sent?: boolean; limit?: number } = {},
+  ): Promise<EmailSummary[]> {
+    const root = opts.sent ? "sent_emails" : "received_emails";
+    const data = await this.graphql(emailListQuery(root));
+    const raw = (data[root] as RawEmail[] | null) ?? [];
+
+    const emails = raw
+      .map(
+        (e): EmailSummary => ({
+          id: e.id,
+          subject: (e.subject ?? "").trim(),
+          sender: (e.sender?.name ?? "").trim(),
+          time: e.created_at?.iso8601 ?? "",
+          has_been_read: e.has_been_read ?? false,
+          has_attachments: Boolean(e.attachment1_name),
+        }),
+      )
+      .sort((a, b) => b.time.localeCompare(a.time));
+
+    return opts.limit !== undefined && opts.limit >= 0
+      ? emails.slice(0, opts.limit)
+      : emails;
+  }
+
+  /** A single email with its body, recipients, and attachments. */
+  async getEmail(emailId: string | number): Promise<EmailDetail> {
+    const data = await this.graphql(SHOW_EMAIL, { id: Number(emailId) });
+    const e = data.email as RawEmail | null;
+    if (!e) throw new Error(`email ${emailId} not found`);
+
+    const attachments: EmailAttachment[] = [
+      { name: e.attachment1_name, url: e.attachment1_url },
+      { name: e.attachment2_name, url: e.attachment2_url },
+      { name: e.attachment3_name, url: e.attachment3_url },
+    ]
+      .filter((a) => a.name)
+      .map((a) => ({ name: a.name ?? "", url: a.url ?? "" }));
+
+    return {
+      id: e.id,
+      subject: (e.subject ?? "").trim(),
+      sender: (e.sender?.name ?? "").trim(),
+      recipients: (e.recipients ?? [])
+        .map((r) => (r.name ?? "").trim())
+        .filter((n) => n),
+      time: e.created_at?.iso8601 ?? "",
+      has_been_read: e.has_been_read ?? false,
+      content: e.content ?? "",
+      attachments,
     };
   }
 }

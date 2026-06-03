@@ -9,6 +9,8 @@
 import type {
   ChatRoomDetail,
   ChatRoomSummary,
+  EmailDetail,
+  EmailSummary,
   Headcount,
   RosterEntry,
 } from "./client.ts";
@@ -163,6 +165,40 @@ export function renderChatTranscript(room: ChatRoomDetail): string {
     lines.push("");
   }
   return lines.join("\n").trimEnd();
+}
+
+/** Emails as a table: id, unread marker, date, sender, attachment marker, subject. */
+export function renderEmails(emails: EmailSummary[]): string {
+  if (emails.length === 0) return "(no emails)";
+  const clip = (s: string, n: number) =>
+    s.length > n ? `${s.slice(0, n - 1)}…` : s;
+  const rows = emails.map((e) => [
+    String(e.id),
+    e.has_been_read ? "" : "●",
+    cell(e.time),
+    clip(e.sender || "?", 24),
+    e.has_attachments ? "@" : "",
+    clip(e.subject.replace(/\s+/g, " ").trim() || "(no subject)", 50),
+  ]);
+  const body = table(["Id", "New", "Date", "From", "Att", "Subject"], rows);
+  return `${body}\n\n${emails.length} emails`;
+}
+
+/** A single email: a header block then the body. */
+export function renderEmail(email: EmailDetail): string {
+  const lines = [
+    `# ${email.subject || "(no subject)"}`,
+    `From:  ${email.sender || "?"}`,
+    `Date:  ${cell(email.time)}`,
+    `To:    ${email.recipients.length} recipient${email.recipients.length === 1 ? "" : "s"}`,
+  ];
+  if (!email.has_been_read) lines.push("Status: unread");
+  if (email.attachments.length) {
+    lines.push("Attachments:");
+    for (const a of email.attachments) lines.push(`  @ ${a.name}  ${a.url}`);
+  }
+  lines.push("", email.content || "(no content)");
+  return lines.join("\n");
 }
 
 /** Headcount as an indented status tally, optionally listing each name. */

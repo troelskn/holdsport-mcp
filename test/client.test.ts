@@ -312,7 +312,16 @@ const CHAT_MESSAGES = [
  * Stub the GraphQL endpoint, dispatching on the operation in the request body.
  * Returns the number of SignIn calls so tests can assert token memoization.
  */
-function stubGraphql(opts: { rooms?: unknown; teams?: unknown; room?: unknown } = {}): {
+function stubGraphql(
+  opts: {
+    rooms?: unknown;
+    teams?: unknown;
+    room?: unknown;
+    received?: unknown;
+    sent?: unknown;
+    email?: unknown;
+  } = {},
+): {
   signIns: () => number;
   requests: () => Array<{ auth?: string; query: string }>;
 } {
@@ -339,6 +348,15 @@ function stubGraphql(opts: { rooms?: unknown; teams?: unknown; room?: unknown } 
     }
     if (body.query.includes("chat_room")) {
       return json({ data: { chat_room: opts.room ?? null } });
+    }
+    if (body.query.includes("received_emails")) {
+      return json({ data: { received_emails: opts.received ?? [] } });
+    }
+    if (body.query.includes("sent_emails")) {
+      return json({ data: { sent_emails: opts.sent ?? [] } });
+    }
+    if (body.query.includes("email(id:")) {
+      return json({ data: { email: opts.email ?? null } });
     }
     return json({});
   });
@@ -496,6 +514,98 @@ describe("HoldsportClient chat (GraphQL)", () => {
     });
     await expect(new HoldsportClient(chatConfig).listChatRooms()).rejects.toThrow(
       /no access_token/,
+    );
+  });
+});
+
+const INBOX = [
+  {
+    id: 11,
+    subject: "Older notice ",
+    has_been_read: true,
+    created_at: { iso8601: "2025-01-09T10:00:00+01:00" },
+    sender: { id: 5, name: "Coach Bo" },
+    attachment1_name: null,
+  },
+  {
+    id: 12,
+    subject: "Newest, with file",
+    has_been_read: false,
+    created_at: { iso8601: "2025-01-12T08:00:00+01:00" },
+    sender: { id: 6, name: "Admin Ann" },
+    attachment1_name: "agenda.pdf",
+  },
+];
+
+describe("HoldsportClient email (GraphQL)", () => {
+  let originalFetch: typeof fetch;
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    clearChatTokenCache();
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    clearChatTokenCache();
+  });
+
+  it("shapes the inbox newest-first with read + attachment flags", async () => {
+    stubGraphql({ received: INBOX });
+    const emails = await new HoldsportClient(chatConfig).listEmails();
+    expect(emails.map((e) => e.id)).toEqual([12, 11]); // newest first
+    expect(emails[0]).toEqual({
+      id: 12,
+      subject: "Newest, with file",
+      sender: "Admin Ann",
+      time: "2025-01-12T08:00:00+01:00",
+      has_been_read: false,
+      has_attachments: true,
+    });
+    expect(emails[1].has_attachments).toBe(false);
+  });
+
+  it("reads the sent box when sent:true", async () => {
+    const spy = stubGraphql({ sent: [INBOX[0]] });
+    const emails = await new HoldsportClient(chatConfig).listEmails({ sent: true });
+    expect(emails).toHaveLength(1);
+    expect(spy.requests().some((r) => r.query.includes("sent_emails"))).toBe(true);
+  });
+
+  it("limits to the most recent N", async () => {
+    stubGraphql({ received: INBOX });
+    const emails = await new HoldsportClient(chatConfig).listEmails({ limit: 1 });
+    expect(emails.map((e) => e.id)).toEqual([12]);
+  });
+
+  it("shapes a single email with recipients and non-empty attachments", async () => {
+    stubGraphql({
+      email: {
+        id: 12,
+        subject: "Newest",
+        content: "Hello team",
+        has_been_read: false,
+        created_at: { iso8601: "2025-01-12T08:00:00+01:00" },
+        sender: { id: 6, name: "Admin Ann" },
+        recipients: [{ id: 1, name: "Bo Berg" }, { id: 2, name: "Cy Cohen" }],
+        attachment1_name: "agenda.pdf",
+        attachment1_url: "https://files/agenda.pdf",
+        attachment2_name: null,
+        attachment2_url: null,
+        attachment3_name: null,
+        attachment3_url: null,
+      },
+    });
+    const email = await new HoldsportClient(chatConfig).getEmail("12");
+    expect(email.content).toBe("Hello team");
+    expect(email.recipients).toEqual(["Bo Berg", "Cy Cohen"]);
+    expect(email.attachments).toEqual([
+      { name: "agenda.pdf", url: "https://files/agenda.pdf" },
+    ]);
+  });
+
+  it("throws when the email is not found", async () => {
+    stubGraphql({ email: null });
+    await expect(new HoldsportClient(chatConfig).getEmail(999)).rejects.toThrow(
+      /email 999 not found/,
     );
   });
 });

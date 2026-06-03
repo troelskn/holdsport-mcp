@@ -253,8 +253,8 @@ tool(
   (client) => client.listProfiles(),
 );
 
-/** Chat-only connection fields (chat goes over GraphQL, not REST). */
-const chatAuth = {
+/** Connection fields for the GraphQL-backed tools (chat + email), not REST. */
+const graphqlAuth = {
   graphql_url: z
     .string()
     .optional()
@@ -266,9 +266,9 @@ const chatAuth = {
 };
 
 /**
- * Note: chat authenticates with the *login username* (not email / member
- * number), which may differ from the REST `username` — pass the login username
- * as `username` for these tools.
+ * Note: the GraphQL tools (chat + email) authenticate with the *login username*
+ * (not email / member number), which may differ from the REST `username` — pass
+ * the login username as `username` for these tools.
  */
 tool(
   "chats",
@@ -277,7 +277,7 @@ tool(
     description:
       "List your chat rooms (GraphQL), each with unread count and a last-message preview. " +
       "`username` must be the login username, not the email.",
-    inputSchema: chatAuth,
+    inputSchema: graphqlAuth,
   },
   (client) => client.listChatRooms(),
 );
@@ -290,7 +290,7 @@ tool(
       "Show a chat room's messages (GraphQL), oldest first. `limit` keeps only the most recent N. " +
       "`username` must be the login username, not the email.",
     inputSchema: {
-      ...chatAuth,
+      ...graphqlAuth,
       room_id: z.string().describe("Chat room id"),
       limit: z
         .number()
@@ -299,6 +299,38 @@ tool(
     },
   },
   (client, a) => client.chatRoom(a.room_id, a.limit),
+);
+
+tool(
+  "emails",
+  {
+    title: "List emails",
+    description:
+      "List your email inbox (GraphQL), most recent first: subject, sender, date, read state. " +
+      "`sent: true` lists the sent box; `limit` keeps only the most recent N. " +
+      "`username` must be the login username, not the email.",
+    inputSchema: {
+      ...graphqlAuth,
+      sent: z.boolean().optional().describe("List the sent box instead of the inbox"),
+      limit: z.number().optional().describe("Only the most recent N emails"),
+    },
+  },
+  (client, a) => client.listEmails({ sent: a.sent, limit: a.limit }),
+);
+
+tool(
+  "email",
+  {
+    title: "Read email",
+    description:
+      "Show a single email (GraphQL): subject, sender, recipients, body, and attachments. " +
+      "`username` must be the login username, not the email.",
+    inputSchema: {
+      ...graphqlAuth,
+      email_id: z.string().describe("Email id"),
+    },
+  },
+  (client, a) => client.getEmail(a.email_id),
 );
 
 tool(
