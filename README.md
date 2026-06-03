@@ -53,7 +53,7 @@ Chat and email are **not** part of the REST API — they live on a separate Grap
 
 `emails` lists your inbox most-recent first (subject, sender, date, read state; `--sent` for the sent box); `email <id>` shows one email's body and attachments. Note that bulk-email bodies are stored as HTML, so `email` content may contain HTML and merge placeholders like `{{ fornavn }}`.
 
-`SignIn` requires the **login username** (e.g. `troelsknaknielsen`) — not the email or member number. Since REST Basic auth also accepts the login username, a single `HOLDSPORT_USERNAME` set to it works for every command. To skip `SignIn` entirely, supply a token via `HOLDSPORT_ACCESS_TOKEN`.
+`SignIn` requires the **login username** (e.g. `troelsknaknielsen`) — not the email or member number. Since REST Basic auth also accepts the login username, a single `HOLDSPORT_USERNAME` set to it works for every command.
 
 Minted tokens are cached in-process, keyed by login — so the long-lived MCP server can serve multiple users without ever handing one login's token to another, and repeat chat calls skip re-authenticating.
 

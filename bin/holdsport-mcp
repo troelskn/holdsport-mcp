@@ -45,7 +45,6 @@ type Auth = {
   username: string;
   password: string;
   team_id?: string;
-  access_token?: string;
 };
 
 /** Build a per-call client from the credentials supplied in a tool's arguments. */
@@ -54,7 +53,6 @@ function clientFor(a: Auth): HoldsportClient {
     username: a.username,
     password: a.password,
     teamId: a.team_id,
-    accessToken: a.access_token,
   });
 }
 
@@ -242,14 +240,6 @@ tool(
   (client) => client.listProfiles(),
 );
 
-/** Extra field for the GraphQL-backed tools (chat + email), not REST. */
-const graphqlAuth = {
-  access_token: z
-    .string()
-    .optional()
-    .describe("Pre-obtained GraphQL access token (skips SignIn)"),
-};
-
 /**
  * Note: the GraphQL tools (chat + email) authenticate with the *login username*
  * (not email / member number), which may differ from the REST `username` — pass
@@ -262,7 +252,6 @@ tool(
     description:
       "List your chat rooms (GraphQL), each with unread count and a last-message preview. " +
       "`username` must be the login username, not the email.",
-    inputSchema: graphqlAuth,
   },
   (client) => client.listChatRooms(),
 );
@@ -275,7 +264,6 @@ tool(
       "Show a chat room's messages (GraphQL), oldest first. `limit` keeps only the most recent N. " +
       "`username` must be the login username, not the email.",
     inputSchema: {
-      ...graphqlAuth,
       room_id: z.string().describe("Chat room id"),
       limit: z
         .number()
@@ -295,7 +283,6 @@ tool(
       "`sent: true` lists the sent box; `limit` keeps only the most recent N. " +
       "`username` must be the login username, not the email.",
     inputSchema: {
-      ...graphqlAuth,
       sent: z.boolean().optional().describe("List the sent box instead of the inbox"),
       limit: z.number().optional().describe("Only the most recent N emails"),
     },
@@ -311,7 +298,6 @@ tool(
       "Show a single email (GraphQL): subject, sender, recipients, body, and attachments. " +
       "`username` must be the login username, not the email.",
     inputSchema: {
-      ...graphqlAuth,
       email_id: z.string().describe("Email id"),
     },
   },

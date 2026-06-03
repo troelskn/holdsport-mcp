@@ -448,14 +448,6 @@ describe("HoldsportClient chat (GraphQL)", () => {
     expect(spy.signIns()).toBe(2); // alice + bob; the second alice is a cache hit
   });
 
-  it("skips SignIn when an access token is configured", async () => {
-    const spy = stubGraphql();
-    await new HoldsportClient({ ...chatConfig, accessToken: "preset" }).listChatRooms();
-    expect(spy.signIns()).toBe(0);
-    const query = spy.requests().find((r) => r.query.includes("rooms_users_chat_rooms"));
-    expect(query?.auth).toBe("preset");
-  });
-
   it("shapes a room's messages oldest-first with image urls", async () => {
     stubGraphql({
       room: {

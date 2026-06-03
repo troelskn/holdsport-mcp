@@ -142,7 +142,6 @@ Environment:
   HOLDSPORT_USERNAME      Holdsport login username (not email/member no.)
   HOLDSPORT_PASSWORD      Holdsport password
   HOLDSPORT_TEAM_ID       Default team id for team-scoped commands
-  HOLDSPORT_ACCESS_TOKEN  Pre-obtained GraphQL token (skips SignIn)
 `;
 
 async function main(argv: string[]): Promise<void> {

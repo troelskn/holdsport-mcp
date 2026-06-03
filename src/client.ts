@@ -41,8 +41,6 @@ export interface Config {
   password: string;
   /** Default team for team-scoped calls when no explicit id is given. */
   teamId?: string;
-  /** Pre-obtained GraphQL access token; skips the `SignIn` round-trip. */
-  accessToken?: string;
 }
 
 export type Query = Record<string, string | number | undefined>;
@@ -69,7 +67,6 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     username,
     password,
     teamId: overrides.teamId ?? process.env.HOLDSPORT_TEAM_ID,
-    accessToken: overrides.accessToken ?? process.env.HOLDSPORT_ACCESS_TOKEN,
   };
 }
 
@@ -594,13 +591,10 @@ export class HoldsportClient {
 
   /**
    * The GraphQL access token, minting one via `SignIn` on first use and caching
-   * it in the process-level {@link accessTokenCache} (keyed by endpoint + login)
-   * for reuse across calls. A `config.accessToken` short-circuits the SignIn
-   * entirely.
+   * it in the process-level {@link accessTokenCache} (keyed by login) for reuse
+   * across calls.
    */
   private async accessToken(): Promise<string> {
-    if (this.config.accessToken) return this.config.accessToken;
-
     // Key the cache by username, so a token minted for one set of
     // credentials is never served to a different login within the process.
     const username = this.config.username;
