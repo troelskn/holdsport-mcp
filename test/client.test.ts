@@ -101,22 +101,6 @@ describe("REST transport (exercised via the read methods)", () => {
     expect(seenAuth).toBe(`Basic ${Buffer.from("u:p").toString("base64")}`);
   });
 
-  it("appends query params, skipping undefined", async () => {
-    let seenUrl = "";
-    stubFetch((url) => {
-      seenUrl = url;
-      return json([]);
-    });
-    // teamId comes from baseConfig ("99"); per_page is undefined and dropped.
-    await new HoldsportClient(baseConfig).listActivities(undefined, {
-      date: "2026-06-01",
-      page: 2,
-    });
-    expect(seenUrl).toContain("date=2026-06-01");
-    expect(seenUrl).toContain("page=2");
-    expect(seenUrl).not.toContain("per_page");
-  });
-
   it("throws on a non-2xx response", async () => {
     stubFetch(() => json({ error: "nope" }, 404, "Not Found"));
     await expect(new HoldsportClient(baseConfig).listTeams()).rejects.toThrow(
@@ -188,53 +172,6 @@ describe("HoldsportClient.roster", () => {
     });
     expect(rows).toHaveLength(2);
     expect(rows.every((r) => r.role === "player")).toBe(true);
-  });
-});
-
-const ACTIVITY_DETAIL = {
-  id: 555,
-  activities_users: [
-    { user_id: 1, name: "Bo", status: "Tilmeldt", status_code: 1 },
-    { user_id: 2, name: "Ann", status: "Afmeldt", status_code: 2 },
-    { user_id: 3, name: "Cy", status: "Tilmeldt", status_code: 1 },
-    { user_id: 4, name: "Dee" }, // no answer -> "(ukendt)"
-  ],
-};
-
-describe("HoldsportClient.headcount", () => {
-  let originalFetch: typeof fetch;
-  beforeEach(() => {
-    originalFetch = globalThis.fetch;
-  });
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-  });
-
-  it("tallies by status, ordered by status_code, including no-answers", async () => {
-    stubFetch(() => json(ACTIVITY_DETAIL));
-    const hc = await new HoldsportClient(baseConfig).headcount("555");
-    expect(hc.activity_id).toBe(555);
-    expect(hc.total).toBe(4);
-    expect(Object.keys(hc.status)).toEqual(["Tilmeldt", "Afmeldt", "(ukendt)"]);
-    expect(hc.status).toEqual({ Tilmeldt: 2, Afmeldt: 1, "(ukendt)": 1 });
-    expect(hc.people).toHaveLength(4);
-  });
-
-  it("narrows to role-1 players by joining on member id", async () => {
-    const playerMembers = [
-      { id: 1, role: 1 },
-      { id: 2, role: 2 }, // Ann is staff -> dropped
-      { id: 3, role: 1 },
-      { id: 4, role: 1 },
-    ];
-    stubFetch((url) =>
-      url.endsWith("/members") ? json(playerMembers) : json(ACTIVITY_DETAIL),
-    );
-    const hc = await new HoldsportClient(baseConfig).headcount("555", undefined, {
-      players: true,
-    });
-    expect(hc.total).toBe(3);
-    expect(hc.status).toEqual({ Tilmeldt: 2, "(ukendt)": 1 });
   });
 });
 
@@ -611,7 +548,7 @@ describe("HoldsportClient email (GraphQL)", () => {
   });
 });
 
-describe("HoldsportClient rich activities (GraphQL)", () => {
+describe("HoldsportClient activities (GraphQL)", () => {
   let originalFetch: typeof fetch;
   beforeEach(() => {
     originalFetch = globalThis.fetch;
@@ -655,7 +592,7 @@ describe("HoldsportClient rich activities (GraphQL)", () => {
         },
       ],
     });
-    const rows = await new HoldsportClient(chatConfig).listActivitiesRich({
+    const rows = await new HoldsportClient(chatConfig).listActivities({
       teamId: "37141",
       date: "2026-06-03",
     });
@@ -700,7 +637,7 @@ describe("HoldsportClient rich activities (GraphQL)", () => {
         custom_tasks: [{ id: 9 }],
       },
     });
-    const a = await new HoldsportClient(chatConfig).activityRich("7");
+    const a = await new HoldsportClient(chatConfig).getActivity("7");
     expect(a.counts).toEqual({ attending: 3, players: 2, coaches: 1, max: 999 });
     expect(a.attendance.attending_players).toEqual(["Bo Berg #6", "Cy Cohen"]);
     expect(a.attendance.attending_coaches).toEqual(["Coach Ann"]);
@@ -714,7 +651,7 @@ describe("HoldsportClient rich activities (GraphQL)", () => {
   it("throws when the activity is not found", async () => {
     stubGraphql({ activity: null });
     await expect(
-      new HoldsportClient(chatConfig).activityRich(404),
+      new HoldsportClient(chatConfig).getActivity(404),
     ).rejects.toThrow(/activity 404 not found/);
   });
 });

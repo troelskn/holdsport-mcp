@@ -13,7 +13,6 @@ import type {
   ChatRoomSummary,
   EmailDetail,
   EmailSummary,
-  Headcount,
   RosterEntry,
 } from "./client.ts";
 
@@ -259,28 +258,5 @@ export function renderActivity(
     block("Not attending", a.attendance.not_attending);
     block("No answer", a.attendance.no_answer);
   }
-  return lines.join("\n");
-}
-
-/** Headcount as an indented status tally, optionally listing each name. */
-export function renderHeadcount(
-  hc: Headcount,
-  opts: { names?: boolean } = {},
-): string {
-  const lines = [`Activity ${hc.activity_id}`];
-  for (const status of Object.keys(hc.status)) {
-    lines.push(
-      `  ${status.padEnd(12)}${String(hc.status[status]).padStart(4)}`,
-    );
-    if (opts.names) {
-      for (const p of hc.people) {
-        if ((p.status ?? "(ukendt)") === status) {
-          lines.push(`      - ${p.name ?? "(unnamed)"}`);
-        }
-      }
-    }
-  }
-  lines.push(`  ${"─".repeat(16)}`);
-  lines.push(`  ${"Total".padEnd(12)}${String(hc.total).padStart(4)}`);
   return lines.join("\n");
 }

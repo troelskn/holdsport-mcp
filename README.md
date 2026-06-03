@@ -34,13 +34,11 @@ bun bin/holdsport help
 bun bin/holdsport teams
 bun bin/holdsport roster --players --csv
 bun bin/holdsport activities 2026-06-01
-bun bin/holdsport headcount <activity_id> --players --names
+bun bin/holdsport activity <activity_id> --names
 bun bin/holdsport chats
 bun bin/holdsport chat <room_id> --limit 20
 bun bin/holdsport emails --limit 20
 bun bin/holdsport email <email_id>
-bun bin/holdsport gql-activities
-bun bin/holdsport gql-activity <activity_id> --names
 ```
 
 Team-scoped commands default to `HOLDSPORT_TEAM_ID`; override per call with `--team <id>`. Output is human-readable by default; add `--json` (the `roster` command also has `--csv`). The CLI is read-only and exposes only the named read commands — there is no raw-request escape hatch.
@@ -49,19 +47,17 @@ Credentials default to the environment but can be overridden per call with `--us
 
 ### Chat & email (GraphQL)
 
-Chat and email are **not** part of the REST API — they live on a separate GraphQL endpoint (`https://www.holdsport.dk/graphql`) with its own auth, reverse-engineered in [`CHAT_API.md`](CHAT_API.md). The client handles this transparently: it sends the required `X-App-Version` header, runs a `SignIn` mutation to mint a token, and reuses it for the read queries. The `chats` / `chat` / `emails` / `email` commands and tools (plus the experimental `gql-*` activities below) are GraphQL, and all are read-only.
+Chat, email, and activities are **not** part of the REST API — they live on a separate GraphQL endpoint (`https://www.holdsport.dk/graphql`) with its own auth, reverse-engineered in [`CHAT_API.md`](CHAT_API.md). The client handles this transparently: it sends the required `X-App-Version` header, runs a `SignIn` mutation to mint a token, and reuses it for the read queries. These commands and tools (`chats` / `chat` / `emails` / `email` / `activities` / `activity`) are GraphQL, and all are read-only.
 
 `chats` lists both your ad-hoc rooms (the ones you're directly added to) and the team-scoped rooms — team, coach, and parent chats — across all your teams, just like the app. `chat <room_id>` shows any room's transcript by id, whatever its scope.
 
 `emails` lists your inbox most-recent first (subject, sender, date, read state; `--sent` for the sent box); `email <id>` shows one email's body and attachments. Note that bulk-email bodies are stored as HTML, so `email` content may contain HTML and merge placeholders like `{{ fornavn }}`.
 
+`activities [date]` lists a team's upcoming activities (type, place, sign-up count), paginated with `--page`. `activity <id>` shows one activity with a full attendance breakdown — counts plus, with `--names`, the named attending / not-attending / no-answer lists.
+
 `SignIn` requires the **login username** (e.g. `troelsknaknielsen`) — not the email or member number. Since REST Basic auth also accepts the login username, a single `HOLDSPORT_USERNAME` set to it works for every command.
 
-#### Experimental: richer activities (`gql-*`)
-
-`gql-activities` and `gql-activity` are GraphQL-backed takes on the REST `activities` / `activity` / `attendees` / `headcount`, kept under a separate namespace while they prove out. `gql-activities [date]` lists a team's upcoming activities (type, place, sign-up count), paginated with `--page`. `gql-activity <id>` shows one activity with a full attendance breakdown — counts plus, with `--names`, the named attending / not-attending / no-answer lists (the REST `headcount` only gave names by status). If they work out, they'll be renamed to take over the canonical names and the REST versions removed.
-
-Minted tokens are cached in-process, keyed by login — so the long-lived MCP server can serve multiple users without ever handing one login's token to another, and repeat chat calls skip re-authenticating.
+Minted tokens are cached in-process, keyed by login — so the long-lived MCP server can serve multiple users without ever handing one login's token to another, and repeat calls skip re-authenticating.
 
 ## MCP server
 
@@ -92,4 +88,4 @@ The host (or the model) provides `username`/`password` with each tool call.
 
 ### Tools
 
-`teams`, `members`, `member`, `roster`, `notes`, `activities`, `activity`, `attendees`, `headcount`, `tasks`, `user`, `profiles`, `chats`, `chat`, `emails`, `email`, and the experimental `gql_activities` / `gql_activity`. Every tool requires `username` and `password`; team-scoped tools also need a `team_id`. The GraphQL tools (`chats`, `chat`, `emails`, `email`, `gql_activities`, `gql_activity`) authenticate over GraphQL, so their `username` must be the **login username**, not the email.
+`teams`, `members`, `member`, `roster`, `notes`, `activities`, `activity`, `tasks`, `user`, `profiles`, `chats`, `chat`, `emails`, and `email`. Every tool requires `username` and `password`; team-scoped tools also need a `team_id`. The GraphQL tools (`chats`, `chat`, `emails`, `email`, `activities`, `activity`) authenticate over GraphQL, so their `username` must be the **login username**, not the email.

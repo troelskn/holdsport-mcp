@@ -35,7 +35,6 @@ import {
   renderChatTranscript,
   renderEmail,
   renderEmails,
-  renderHeadcount,
   renderHuman,
   rosterCsv,
   rosterTable,
@@ -122,11 +121,9 @@ Core commands:
   roster                      Contact list: name/role/mobile/email
                                 flags: --players, --staff, --csv
   notes                       List the team's notes
-  activities [date]           List the team's activities (date = YYYY-MM-DD, from that day on)
-                                flags: --page N --per-page N
-  activity <activity_id>      Show a single activity
-  attendees <activity_id>     List an activity's attendees (activities_users)
-  headcount <activity_id>     Tally attendees by status (flags: --players, --names, --json)
+  activities [date]           Upcoming activities: type, place, sign-up count
+                                (date = YYYY-MM-DD, from that day on; flags: --page N)
+  activity <activity_id>      One activity + attendance breakdown (flags: --names)
   tasks <activity_id>         List an activity's tasks
   user                        Show the current user profile
   profiles                    List managed profiles
@@ -136,11 +133,6 @@ Chat & email:
   chat <room_id>              Show a room's messages (flags: --limit N)
   emails                      List your inbox (flags: --sent, --limit N)
   email <email_id>            Show a single email (subject, body, attachments)
-
-Activities — richer GraphQL versions (experimental; may replace the REST ones):
-  gql-activities [date]       Upcoming activities: type, place, sign-up count
-                                flags: --team id, --page N
-  gql-activity <activity_id>  One activity + attendance breakdown (flags: --names)
 
 Other:
   help                        Show this help
@@ -223,52 +215,21 @@ async function main(argv: string[]): Promise<void> {
         fields: ["created_at", "title", "created_by"],
       });
 
-    case "activities":
-      return output(
-        await client.listActivities(teamOf(flags), {
-          date: positional[0],
-          page: flags.page,
-          perPage: flags["per-page"] ?? flags.per_page,
-        }),
-        flags,
-        { fields: ["id", "starttime", "endtime", "name", "place", "status"] },
-      );
+    case "activities": {
+      const rows = await client.listActivities({
+        teamId: teamOf(flags),
+        date: positional[0],
+        page: flags.page !== undefined ? Number(flags.page) : undefined,
+      });
+      if (flags.json) return print(rows);
+      return console.log(renderActivities(rows));
+    }
 
     case "activity": {
       const activityId = need(positional, 0, "activity_id");
-      return output(
-        await client.getActivity(activityId, teamOf(flags)),
-        flags,
-        {
-          fields: [
-            "id",
-            "name",
-            "starttime",
-            "endtime",
-            "place",
-            "pickup_place",
-            "pickup_time",
-            "status",
-            "comment",
-          ],
-        },
-      );
-    }
-
-    case "attendees": {
-      const activityId = need(positional, 0, "activity_id");
-      return output(await client.listAttendees(activityId), flags, {
-        fields: ["user_id", "name", "status", "status_code"],
-      });
-    }
-
-    case "headcount": {
-      const activityId = need(positional, 0, "activity_id");
-      const hc = await client.headcount(activityId, teamOf(flags), {
-        players: Boolean(flags.players),
-      });
-      if (flags.json) return print(hc);
-      return console.log(renderHeadcount(hc, { names: Boolean(flags.names) }));
+      const detail = await client.getActivity(activityId);
+      if (flags.json) return print(detail);
+      return console.log(renderActivity(detail, { names: Boolean(flags.names) }));
     }
 
     case "tasks": {
@@ -313,23 +274,6 @@ async function main(argv: string[]): Promise<void> {
       const email = await client.getEmail(emailId);
       if (flags.json) return print(email);
       return console.log(renderEmail(email));
-    }
-
-    case "gql-activities": {
-      const rows = await client.listActivitiesRich({
-        teamId: teamOf(flags),
-        date: positional[0],
-        page: flags.page !== undefined ? Number(flags.page) : undefined,
-      });
-      if (flags.json) return print(rows);
-      return console.log(renderActivities(rows));
-    }
-
-    case "gql-activity": {
-      const activityId = need(positional, 0, "activity_id");
-      const detail = await client.activityRich(activityId);
-      if (flags.json) return print(detail);
-      return console.log(renderActivity(detail, { names: Boolean(flags.names) }));
     }
 
     default:

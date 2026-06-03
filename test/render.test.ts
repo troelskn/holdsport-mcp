@@ -7,7 +7,6 @@ import type {
   ChatRoomSummary,
   EmailDetail,
   EmailSummary,
-  Headcount,
   RosterEntry,
 } from "../src/client.ts";
 import {
@@ -20,7 +19,6 @@ import {
   renderChatTranscript,
   renderEmail,
   renderEmails,
-  renderHeadcount,
   renderHuman,
   rosterCsv,
   rosterTable,
@@ -127,34 +125,6 @@ describe("rosterCsv", () => {
 describe("rosterTable", () => {
   it("includes a player/staff summary line", () => {
     expect(rosterTable(ROWS)).toContain("2 members (1 players, 1 staff)");
-  });
-});
-
-describe("renderHeadcount", () => {
-  const hc: Headcount = {
-    activity_id: 555,
-    total: 3,
-    status: { Tilmeldt: 2, Afmeldt: 1 },
-    people: [
-      { user_id: 1, name: "Bo", status: "Tilmeldt", status_code: 1 },
-      { user_id: 3, name: "Cy", status: "Tilmeldt", status_code: 1 },
-      { user_id: 2, name: "Ann", status: "Afmeldt", status_code: 2 },
-    ],
-  };
-
-  it("renders an indented status tally without names by default", () => {
-    const out = renderHeadcount(hc);
-    expect(out).toContain("Activity 555");
-    expect(out).toContain("Tilmeldt");
-    expect(out).toContain("Total");
-    expect(out).not.toContain("- Bo");
-  });
-
-  it("lists each name under its status when asked", () => {
-    const out = renderHeadcount(hc, { names: true });
-    expect(out).toContain("- Bo");
-    expect(out).toContain("- Cy");
-    expect(out).toContain("- Ann");
   });
 });
 

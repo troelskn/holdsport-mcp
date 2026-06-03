@@ -89,19 +89,6 @@ export interface RosterEntry {
   member_number: string;
 }
 
-export interface Headcount {
-  activity_id: number;
-  total: number;
-  /** Status label → count, ordered by Holdsport's status_code (1 = Tilmeldt …). */
-  status: Record<string, number>;
-  people: Array<{
-    user_id?: number;
-    name?: string;
-    status?: string;
-    status_code?: number;
-  }>;
-}
-
 /** A chat room as shown in the room list, shaped for humans. */
 export interface ChatRoomSummary {
   id: number;
@@ -165,12 +152,11 @@ export interface EmailDetail {
   attachments: EmailAttachment[];
 }
 
-// --- Rich (GraphQL) activities ---------------------------------------------
-// An experimental, richer take on activities/attendance than the REST
-// `listActivities`/`getActivity`/`headcount`. Exposed under the `gql-*` names so
-// it can be evaluated alongside the REST set before replacing it.
+// --- Activities (GraphQL) --------------------------------------------------
+// Activities/attendance run over GraphQL: the list carries a live sign-up count
+// per activity, and the detail returns the full attendance breakdown by name.
 
-/** An activity as shown in the rich list, shaped for humans. */
+/** An activity as shown in the list, shaped for humans. */
 export interface ActivitySummary {
   id: number;
   name: string;
@@ -426,15 +412,12 @@ export class HoldsportClient {
    * is no write path. Private: external callers use the named read methods
    * below, not an arbitrary-path escape hatch.
    */
-  private async get(path: string, query?: Query): Promise<unknown> {
+  private async get(path: string): Promise<unknown> {
     const url = new URL(
       path.startsWith("http")
         ? path
         : `${DEFAULT_BASE_URL}/${path.replace(/^\/+/, "")}`,
     );
-    for (const [key, value] of Object.entries(query ?? {})) {
-      if (value !== undefined) url.searchParams.set(key, String(value));
-    }
 
     const auth = Buffer.from(
       `${this.config.username}:${this.config.password}`,
@@ -537,93 +520,6 @@ export class HoldsportClient {
 
   listNotes(teamId?: string): Promise<unknown> {
     return this.get(`teams/${this.resolveTeam(teamId)}/notes`);
-  }
-
-  listActivities(
-    teamId?: string,
-    opts: {
-      date?: string;
-      page?: string | number;
-      perPage?: string | number;
-    } = {},
-  ): Promise<unknown> {
-    return this.get(`teams/${this.resolveTeam(teamId)}/activities`, {
-      date: opts.date,
-      page: opts.page,
-      per_page: opts.perPage,
-    });
-  }
-
-  getActivity(activityId: string, teamId?: string): Promise<unknown> {
-    return this.get(
-      `teams/${this.resolveTeam(teamId)}/activities/${activityId}`,
-    );
-  }
-
-  listAttendees(activityId: string): Promise<unknown> {
-    return this.get(`activities/${activityId}/activities_users`);
-  }
-
-  /** Tally an activity's invited list by status. */
-  async headcount(
-    activityId: string,
-    teamId?: string,
-    opts: { players?: boolean } = {},
-  ): Promise<Headcount> {
-    const team = this.resolveTeam(teamId);
-    // The team activity-detail endpoint embeds the *full* invited list,
-    // including no-answers (Ukendt). The /activities/:id/activities_users
-    // endpoint omits them, so it can't be trusted for a headcount.
-    const data = (await this.get(
-      `teams/${team}/activities/${activityId}`,
-    )) as { activities_users?: unknown };
-    let users = (
-      Array.isArray(data?.activities_users) ? data.activities_users : []
-    ) as Array<{
-      status?: string;
-      status_code?: number;
-      name?: string;
-      user_id?: number;
-    }>;
-
-    // The invite list mixes players with coaches/leaders/parents. The players
-    // option narrows it to actual players (role 1) by joining on member id.
-    if (opts.players) {
-      const membersData = await this.get(`teams/${team}/members`);
-      const members = (
-        Array.isArray(membersData) ? membersData : []
-      ) as Array<{ id?: number; role?: number }>;
-      const playerIds = new Set(
-        members.filter((m) => m.role === 1).map((m) => m.id),
-      );
-      users = users.filter((u) => playerIds.has(u.user_id));
-    }
-
-    // Group by the human-readable status; remember each status_code so we
-    // can order the buckets (1 = Tilmeldt, 2 = Afmeldt, ...).
-    const groups = new Map<string, { code: number; names: string[] }>();
-    for (const u of users) {
-      const status = u.status ?? "(ukendt)";
-      const code = typeof u.status_code === "number" ? u.status_code : 99;
-      const group = groups.get(status) ?? { code, names: [] };
-      group.names.push(u.name ?? "(unnamed)");
-      groups.set(status, group);
-    }
-    const ordered = [...groups.entries()].sort((a, b) => a[1].code - b[1].code);
-
-    return {
-      activity_id: Number(activityId),
-      total: users.length,
-      status: Object.fromEntries(
-        ordered.map(([status, g]) => [status, g.names.length]),
-      ),
-      people: users.map((u) => ({
-        user_id: u.user_id,
-        name: u.name,
-        status: u.status,
-        status_code: u.status_code,
-      })),
-    };
   }
 
   listTasks(activityId: string): Promise<unknown> {
@@ -886,14 +782,14 @@ export class HoldsportClient {
     };
   }
 
-  // --- Rich (GraphQL) activities -------------------------------------------
+  // --- Activities (GraphQL) ------------------------------------------------
 
   /**
-   * The team's upcoming activities (GraphQL), one page at a time, from `date`
-   * onward (defaults to today). Richer per-row than the REST `listActivities`:
-   * event type, place, and a live attendee count.
+   * The team's upcoming activities, one page at a time, from `date` onward
+   * (defaults to today). Each row carries its event type, place, and a live
+   * sign-up count.
    */
-  async listActivitiesRich(
+  async listActivities(
     opts: { teamId?: string; date?: string; page?: number } = {},
   ): Promise<ActivitySummary[]> {
     const team = this.resolveTeam(opts.teamId);
@@ -925,11 +821,10 @@ export class HoldsportClient {
   }
 
   /**
-   * A single activity with its full attendance breakdown (GraphQL). Subsumes the
-   * REST `getActivity` + `listAttendees` + `headcount`: it returns the named
-   * attending / not-attending / no-answer lists plus the counts.
+   * A single activity with its full attendance breakdown: the named attending /
+   * not-attending / no-answer lists plus the counts.
    */
-  async activityRich(activityId: string | number): Promise<ActivityDetail> {
+  async getActivity(activityId: string | number): Promise<ActivityDetail> {
     const data = await this.graphql(SHOW_ACTIVITY, { id: Number(activityId) });
     const a = data.activity as RawActivityDetail | null;
     if (!a) throw new Error(`activity ${activityId} not found`);

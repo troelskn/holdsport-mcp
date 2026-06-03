@@ -157,65 +157,39 @@ tool(
   (client, a) => client.listNotes(a.team_id),
 );
 
+// Activities run over GraphQL (login-username auth). The detail folds in what
+// used to be separate attendees + headcount tools.
 tool(
   "activities",
   {
     title: "List activities",
     description:
-      "List a team's activities. Optional date (YYYY-MM-DD) lists from that day on.",
+      "List a team's upcoming activities, from `date` (YYYY-MM-DD, default today) onward, " +
+      "one page at a time: event type, place, and sign-up count per activity. " +
+      "`username` must be the login username, not the email.",
     inputSchema: {
       team_id: teamId,
-      date: z.string().optional().describe("Start date YYYY-MM-DD"),
-      page: z.number().optional(),
-      per_page: z.number().optional(),
+      date: z.string().optional().describe("Start date YYYY-MM-DD (default: today)"),
+      page: z.number().optional().describe("Page number (default: 1)"),
     },
   },
   (client, a) =>
-    client.listActivities(a.team_id, {
-      date: a.date,
-      page: a.page,
-      perPage: a.per_page,
-    }),
+    client.listActivities({ teamId: a.team_id, date: a.date, page: a.page }),
 );
 
 tool(
   "activity",
   {
-    title: "Get activity",
-    description: "Show a single activity by id.",
+    title: "Activity detail + attendance",
+    description:
+      "Show one activity with its full attendance breakdown: counts plus the named " +
+      "attending / not-attending / no-answer lists. " +
+      "`username` must be the login username, not the email.",
     inputSchema: {
       activity_id: z.string().describe("Activity id"),
-      team_id: teamId,
     },
   },
-  (client, a) => client.getActivity(a.activity_id, a.team_id),
-);
-
-tool(
-  "attendees",
-  {
-    title: "List attendees",
-    description:
-      "List an activity's attendees (activities_users). Omits people who haven't answered — use headcount for a full tally.",
-    inputSchema: { activity_id: z.string().describe("Activity id") },
-  },
-  (client, a) => client.listAttendees(a.activity_id),
-);
-
-tool(
-  "headcount",
-  {
-    title: "Headcount",
-    description:
-      "Tally an activity's full invited list by status (includes no-answers). players=true narrows to actual players.",
-    inputSchema: {
-      activity_id: z.string().describe("Activity id"),
-      team_id: teamId,
-      players: z.boolean().optional().describe("Only count players (role 1)"),
-    },
-  },
-  (client, a) =>
-    client.headcount(a.activity_id, a.team_id, { players: a.players }),
+  (client, a) => client.getActivity(a.activity_id),
 );
 
 tool(
@@ -302,41 +276,6 @@ tool(
     },
   },
   (client, a) => client.getEmail(a.email_id),
-);
-
-// Rich, GraphQL-backed activities (experimental; may replace the REST
-// activities/activity/attendees/headcount tools). Same login-username auth.
-tool(
-  "gql_activities",
-  {
-    title: "List activities (rich)",
-    description:
-      "List a team's upcoming activities (GraphQL), from `date` (YYYY-MM-DD, default today) onward, " +
-      "one page at a time: event type, place, and sign-up count per activity. " +
-      "`username` must be the login username, not the email.",
-    inputSchema: {
-      team_id: teamId,
-      date: z.string().optional().describe("Start date YYYY-MM-DD (default: today)"),
-      page: z.number().optional().describe("Page number (default: 1)"),
-    },
-  },
-  (client, a) =>
-    client.listActivitiesRich({ teamId: a.team_id, date: a.date, page: a.page }),
-);
-
-tool(
-  "gql_activity",
-  {
-    title: "Activity detail + attendance (rich)",
-    description:
-      "Show one activity (GraphQL) with its full attendance breakdown: counts plus the named " +
-      "attending / not-attending / no-answer lists. Subsumes attendees + headcount. " +
-      "`username` must be the login username, not the email.",
-    inputSchema: {
-      activity_id: z.string().describe("Activity id"),
-    },
-  },
-  (client, a) => client.activityRich(a.activity_id),
 );
 
 await server.connect(new StdioServerTransport());
