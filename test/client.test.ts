@@ -80,7 +80,7 @@ describe("loadConfig", () => {
   });
 });
 
-describe("HoldsportClient.request", () => {
+describe("REST transport (exercised via the read methods)", () => {
   let originalFetch: typeof fetch;
   beforeEach(() => {
     originalFetch = globalThis.fetch;
@@ -89,16 +89,19 @@ describe("HoldsportClient.request", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("sends Basic auth, builds the URL, and parses JSON", async () => {
+  it("sends a GET with Basic auth, builds the URL, and parses JSON", async () => {
     let seenUrl = "";
     let seenAuth: unknown;
+    let seenMethod: unknown;
     stubFetch((url, init) => {
       seenUrl = url;
+      seenMethod = init.method;
       seenAuth = (init.headers as Record<string, string>).Authorization;
       return json({ ok: true });
     });
-    const data = await new HoldsportClient(baseConfig).get("teams");
+    const data = await new HoldsportClient(baseConfig).listTeams();
     expect(data).toEqual({ ok: true });
+    expect(seenMethod).toBe("GET"); // read-only: the REST transport only does GET
     expect(seenUrl).toBe("https://api.example.test/v1/teams");
     expect(seenAuth).toBe(`Basic ${Buffer.from("u:p").toString("base64")}`);
   });
@@ -109,10 +112,10 @@ describe("HoldsportClient.request", () => {
       seenUrl = url;
       return json([]);
     });
-    await new HoldsportClient(baseConfig).get("teams/1/activities", {
+    // teamId comes from baseConfig ("99"); per_page is undefined and dropped.
+    await new HoldsportClient(baseConfig).listActivities(undefined, {
       date: "2026-06-01",
       page: 2,
-      per_page: undefined,
     });
     expect(seenUrl).toContain("date=2026-06-01");
     expect(seenUrl).toContain("page=2");
@@ -121,7 +124,7 @@ describe("HoldsportClient.request", () => {
 
   it("throws on a non-2xx response", async () => {
     stubFetch(() => json({ error: "nope" }, 404, "Not Found"));
-    await expect(new HoldsportClient(baseConfig).get("teams/1")).rejects.toThrow(
+    await expect(new HoldsportClient(baseConfig).listTeams()).rejects.toThrow(
       /HTTP 404/,
     );
   });

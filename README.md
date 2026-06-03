@@ -41,7 +41,7 @@ bun bin/holdsport emails --limit 20
 bun bin/holdsport email <email_id>
 ```
 
-Team-scoped commands default to `HOLDSPORT_TEAM_ID`; override per call with `--team <id>`. Output is human-readable by default; add `--json` (the `roster` command also has `--csv`). The CLI keeps the full escape hatch, including the write-capable `request <METHOD> <path> [json]`.
+Team-scoped commands default to `HOLDSPORT_TEAM_ID`; override per call with `--team <id>`. Output is human-readable by default; add `--json` (the `roster` command also has `--csv`). The CLI is read-only and exposes only the named read commands — there is no raw-request escape hatch.
 
 Credentials default to the environment but can be overridden per call with `--user <login>` / `--pass <password>` (the login username covers REST and chat/email alike).
 
@@ -59,7 +59,7 @@ Minted tokens are cached in-process, keyed by login — so the long-lived MCP se
 
 ## MCP server
 
-The MCP server is **read-only** — it exposes only the read tools plus a GET-only `get` escape hatch. There is no arbitrary-request tool, so an agent driving it can never modify Holdsport data. The chat tools are GraphQL reads only (`SignIn` authenticates but writes nothing, and no generic GraphQL tool is exposed), so the guarantee holds there too.
+The MCP server is **read-only** — every tool maps to a specific read, with no raw request/path escape hatch, so an agent driving it can never reach an unintended endpoint or modify Holdsport data. The chat/email tools are GraphQL reads only (`SignIn` authenticates but writes nothing, and no generic GraphQL tool is exposed), so the guarantee holds there too.
 
 Credentials are passed on **every tool call**: each tool takes `username` and `password` arguments (plus optional `team_id` and `base_url`), and a fresh client is built per call. The server itself takes no arguments and holds no credentials — the MCP host supplies them with each invocation.
 
@@ -86,4 +86,4 @@ The host (or the model) provides `username`/`password` with each tool call.
 
 ### Tools
 
-`teams`, `members`, `member`, `roster`, `notes`, `activities`, `activity`, `attendees`, `headcount`, `tasks`, `user`, `profiles`, `chats`, `chat`, `emails`, `email`, and `get` (raw GET). Every tool requires `username` and `password`; team-scoped tools also need a `team_id`. The GraphQL tools (`chats`, `chat`, `emails`, `email`) authenticate over GraphQL, so their `username` must be the **login username**, not the email.
+`teams`, `members`, `member`, `roster`, `notes`, `activities`, `activity`, `attendees`, `headcount`, `tasks`, `user`, `profiles`, `chats`, `chat`, `emails`, and `email`. Every tool requires `username` and `password`; team-scoped tools also need a `team_id`. The GraphQL tools (`chats`, `chat`, `emails`, `email`) authenticate over GraphQL, so their `username` must be the **login username**, not the email.

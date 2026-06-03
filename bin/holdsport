@@ -11,15 +11,15 @@
  * ../src/render.ts. This file is just argument parsing and output glue.
  *
  * API docs: https://github.com/Holdsport/holdsport-api
- * Only documented endpoints are wrapped below. The generic `get` / `request`
- * commands are the escape hatch for anything not yet given its own command.
+ * Only documented read endpoints are wrapped below — the CLI is read-only and
+ * has no raw-request escape hatch.
  *
  * Run with no arguments (or `--help`) for usage.
  *
  * Auth: the Holdsport API uses HTTP Basic auth with your Holdsport login.
  * Provide credentials via environment variables:
  *
- *     export HOLDSPORT_USERNAME="you@example.com"
+ *     export HOLDSPORT_USERNAME="your-login"
  *     export HOLDSPORT_PASSWORD="your-password"
  */
 
@@ -114,9 +114,9 @@ Team-scoped commands use HOLDSPORT_TEAM_ID by default; override with --team <id>
 Output is human-readable by default; add --json for raw JSON (roster also has --csv).
 
 Credentials default to the environment (below); override per call with
---user <login> / --pass <password>. Use the login username (not email/member number) so chat works too.
+--user <login> / --pass <password>. Use the login username (not email/member number).
 
-Read commands:
+Core commands:
   teams                       List the teams you belong to
   members                     List the team's members (raw JSON)
   member <member_id>          Show a single member
@@ -132,21 +132,17 @@ Read commands:
   user                        Show the current user profile
   profiles                    List managed profiles
 
-Chat & email (GraphQL — same login as everything else):
+Chat & email:
   chats                       List your chat rooms
   chat <room_id>              Show a room's messages (flags: --limit N)
   emails                      List your inbox (flags: --sent, --limit N)
   email <email_id>            Show a single email (subject, body, attachments)
 
-Escape hatch (for undocumented / write endpoints):
-  get <path> [--key val ...]      Raw GET; flags become query params
-  request <METHOD> <path> [json]  Raw request with optional JSON body string
-
 Other:
   help                        Show this help
 
 Environment:
-  HOLDSPORT_USERNAME      Holdsport login username (used for REST + chat/email; not email/member no.)
+  HOLDSPORT_USERNAME      Holdsport login username (not email/member no.)
   HOLDSPORT_PASSWORD      Holdsport password
   HOLDSPORT_TEAM_ID       Default team id for team-scoped commands
   HOLDSPORT_BASE_URL      Override REST API base URL (default: ${DEFAULT_BASE_URL})
@@ -316,20 +312,6 @@ async function main(argv: string[]): Promise<void> {
       const email = await client.getEmail(emailId);
       if (flags.json) return print(email);
       return console.log(renderEmail(email));
-    }
-
-    case "get": {
-      const path = need(positional, 0, "path");
-      // Drop output + credential flags so they don't leak in as query params.
-      const { json: _json, user: _user, pass: _pass, ...query } = flags;
-      return output(await client.get(path, query), flags);
-    }
-
-    case "request": {
-      const method = need(positional, 0, "METHOD").toUpperCase();
-      const path = need(positional, 1, "path");
-      const body = positional[2] ? JSON.parse(positional[2]) : undefined;
-      return output(await client.request(method, path, { body }), flags);
     }
 
     default:

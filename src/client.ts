@@ -323,18 +323,19 @@ export function clearChatTokenCache(): void {
 export class HoldsportClient {
   constructor(private readonly config: Config) {}
 
-  /** Perform an authenticated request and return the parsed JSON body. Throws on non-2xx. */
-  async request(
-    method: string,
-    path: string,
-    opts: { query?: Query; body?: unknown } = {},
-  ): Promise<unknown> {
+  /**
+   * Perform an authenticated GET and return the parsed JSON body. Throws on
+   * non-2xx. This is the only REST transport — the client is read-only, so there
+   * is no write path. Private: external callers use the named read methods
+   * below, not an arbitrary-path escape hatch.
+   */
+  private async get(path: string, query?: Query): Promise<unknown> {
     const url = new URL(
       path.startsWith("http")
         ? path
         : `${this.config.baseUrl}/${path.replace(/^\/+/, "")}`,
     );
-    for (const [key, value] of Object.entries(opts.query ?? {})) {
+    for (const [key, value] of Object.entries(query ?? {})) {
       if (value !== undefined) url.searchParams.set(key, String(value));
     }
 
@@ -343,20 +344,18 @@ export class HoldsportClient {
     ).toString("base64");
 
     const res = await fetch(url, {
-      method,
+      method: "GET",
       headers: {
         Authorization: `Basic ${auth}`,
         Accept: "application/json",
-        ...(opts.body ? { "Content-Type": "application/json" } : {}),
       },
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
 
     const text = await res.text();
 
     if (!res.ok) {
       throw new Error(
-        `HTTP ${res.status} ${res.statusText} for ${method} ${url.pathname}${url.search}\n${text}`,
+        `HTTP ${res.status} ${res.statusText} for GET ${url.pathname}${url.search}\n${text}`,
       );
     }
 
@@ -366,11 +365,6 @@ export class HoldsportClient {
     } catch {
       return text;
     }
-  }
-
-  /** Raw GET escape hatch; flags become query params. */
-  get(path: string, query?: Query): Promise<unknown> {
-    return this.request("GET", path, { query });
   }
 
   /** Resolve the target team from an explicit id, else the configured default. */
@@ -386,16 +380,15 @@ export class HoldsportClient {
   }
 
   listTeams(): Promise<unknown> {
-    return this.request("GET", "teams");
+    return this.get("teams");
   }
 
   listMembers(teamId?: string): Promise<unknown> {
-    return this.request("GET", `teams/${this.resolveTeam(teamId)}/members`);
+    return this.get(`teams/${this.resolveTeam(teamId)}/members`);
   }
 
   getMember(memberId: string, teamId?: string): Promise<unknown> {
-    return this.request(
-      "GET",
+    return this.get(
       `teams/${this.resolveTeam(teamId)}/members/${memberId}`,
     );
   }
@@ -405,8 +398,7 @@ export class HoldsportClient {
     teamId?: string,
     opts: { players?: boolean; staff?: boolean } = {},
   ): Promise<RosterEntry[]> {
-    const data = await this.request(
-      "GET",
+    const data = await this.get(
       `teams/${this.resolveTeam(teamId)}/members`,
     );
     let members = (Array.isArray(data) ? data : []) as MemberRecord[];
@@ -447,7 +439,7 @@ export class HoldsportClient {
   }
 
   listNotes(teamId?: string): Promise<unknown> {
-    return this.request("GET", `teams/${this.resolveTeam(teamId)}/notes`);
+    return this.get(`teams/${this.resolveTeam(teamId)}/notes`);
   }
 
   listActivities(
@@ -458,20 +450,21 @@ export class HoldsportClient {
       perPage?: string | number;
     } = {},
   ): Promise<unknown> {
-    return this.request("GET", `teams/${this.resolveTeam(teamId)}/activities`, {
-      query: { date: opts.date, page: opts.page, per_page: opts.perPage },
+    return this.get(`teams/${this.resolveTeam(teamId)}/activities`, {
+      date: opts.date,
+      page: opts.page,
+      per_page: opts.perPage,
     });
   }
 
   getActivity(activityId: string, teamId?: string): Promise<unknown> {
-    return this.request(
-      "GET",
+    return this.get(
       `teams/${this.resolveTeam(teamId)}/activities/${activityId}`,
     );
   }
 
   listAttendees(activityId: string): Promise<unknown> {
-    return this.request("GET", `activities/${activityId}/activities_users`);
+    return this.get(`activities/${activityId}/activities_users`);
   }
 
   /** Tally an activity's invited list by status. */
@@ -484,8 +477,7 @@ export class HoldsportClient {
     // The team activity-detail endpoint embeds the *full* invited list,
     // including no-answers (Ukendt). The /activities/:id/activities_users
     // endpoint omits them, so it can't be trusted for a headcount.
-    const data = (await this.request(
-      "GET",
+    const data = (await this.get(
       `teams/${team}/activities/${activityId}`,
     )) as { activities_users?: unknown };
     let users = (
@@ -500,7 +492,7 @@ export class HoldsportClient {
     // The invite list mixes players with coaches/leaders/parents. The players
     // option narrows it to actual players (role 1) by joining on member id.
     if (opts.players) {
-      const membersData = await this.request("GET", `teams/${team}/members`);
+      const membersData = await this.get(`teams/${team}/members`);
       const members = (
         Array.isArray(membersData) ? membersData : []
       ) as Array<{ id?: number; role?: number }>;
@@ -538,15 +530,15 @@ export class HoldsportClient {
   }
 
   listTasks(activityId: string): Promise<unknown> {
-    return this.request("GET", `activities/${activityId}/activity_tasks`);
+    return this.get(`activities/${activityId}/activity_tasks`);
   }
 
   getUser(): Promise<unknown> {
-    return this.request("GET", "user");
+    return this.get("user");
   }
 
   listProfiles(): Promise<unknown> {
-    return this.request("GET", "profiles");
+    return this.get("profiles");
   }
 
   // --- Chat (GraphQL) ------------------------------------------------------
