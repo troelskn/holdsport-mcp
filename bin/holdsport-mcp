@@ -7,19 +7,27 @@
  * logic in ../src/client.ts with the CLI; the only thing here is tool wiring.
  *
  * Read-only by design: there is no arbitrary-request tool, so an agent can never
- * modify Holdsport data. The escape hatch (`get`) is restricted to GET.
+ * modify Holdsport data. The escape hatch (`get`) is restricted to GET. The chat
+ * tools are GraphQL reads only — `SignIn` mints an auth token but writes no data,
+ * and no generic GraphQL tool is exposed, so the read-only guarantee still holds.
  *
  * Credentials are passed on every tool call: each tool takes `username` and
  * `password` (and optional `team_id` / `base_url`) in its arguments, and a fresh
  * client is built per call. The server itself takes no startup arguments and
- * holds no credentials — the MCP host supplies them with each invocation.
+ * holds no credentials — the MCP host supplies them with each invocation. (Chat
+ * access tokens minted via SignIn are cached in-process, keyed by login, so
+ * repeat chat calls in a session skip re-authenticating; see clearChatTokenCache.)
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-import { DEFAULT_BASE_URL, HoldsportClient } from "../src/client.ts";
+import {
+  DEFAULT_BASE_URL,
+  DEFAULT_GRAPHQL_URL,
+  HoldsportClient,
+} from "../src/client.ts";
 
 const server = new McpServer({ name: "holdsport", version: "1.0.0" });
 
@@ -43,6 +51,8 @@ type Auth = {
   password: string;
   base_url?: string;
   team_id?: string;
+  graphql_url?: string;
+  access_token?: string;
 };
 
 /** Build a per-call client from the credentials supplied in a tool's arguments. */
@@ -52,6 +62,10 @@ function clientFor(a: Auth): HoldsportClient {
     password: a.password,
     baseUrl: a.base_url ?? DEFAULT_BASE_URL,
     teamId: a.team_id,
+    graphqlUrl: a.graphql_url ?? DEFAULT_GRAPHQL_URL,
+    // Chat tools pass the login username as `username`, so chatUsername can
+    // default to it.
+    accessToken: a.access_token,
   });
 }
 
@@ -237,6 +251,54 @@ tool(
   "profiles",
   { title: "List profiles", description: "List managed profiles." },
   (client) => client.listProfiles(),
+);
+
+/** Chat-only connection fields (chat goes over GraphQL, not REST). */
+const chatAuth = {
+  graphql_url: z
+    .string()
+    .optional()
+    .describe(`Override GraphQL endpoint (default: ${DEFAULT_GRAPHQL_URL})`),
+  access_token: z
+    .string()
+    .optional()
+    .describe("Pre-obtained GraphQL access token (skips SignIn)"),
+};
+
+/**
+ * Note: chat authenticates with the *login username* (not email / member
+ * number), which may differ from the REST `username` — pass the login username
+ * as `username` for these tools.
+ */
+tool(
+  "chats",
+  {
+    title: "List chat rooms",
+    description:
+      "List your chat rooms (GraphQL), each with unread count and a last-message preview. " +
+      "`username` must be the login username, not the email.",
+    inputSchema: chatAuth,
+  },
+  (client) => client.listChatRooms(),
+);
+
+tool(
+  "chat",
+  {
+    title: "Read chat room",
+    description:
+      "Show a chat room's messages (GraphQL), oldest first. `limit` keeps only the most recent N. " +
+      "`username` must be the login username, not the email.",
+    inputSchema: {
+      ...chatAuth,
+      room_id: z.string().describe("Chat room id"),
+      limit: z
+        .number()
+        .optional()
+        .describe("Only the most recent N messages"),
+    },
+  },
+  (client, a) => client.chatRoom(a.room_id, a.limit),
 );
 
 tool(

@@ -29,6 +29,8 @@ import {
   type Query,
 } from "../src/client.ts";
 import {
+  renderChatRooms,
+  renderChatTranscript,
   renderHeadcount,
   renderHuman,
   rosterCsv,
@@ -36,6 +38,7 @@ import {
 } from "../src/render.ts";
 
 const DEFAULT_BASE_URL = "https://api.holdsport.dk/v1";
+const DEFAULT_GRAPHQL_URL = "https://www.holdsport.dk/graphql";
 
 function print(data: unknown): void {
   console.log(typeof data === "string" ? data : JSON.stringify(data, null, 2));
@@ -124,6 +127,10 @@ Read commands:
   user                        Show the current user profile
   profiles                    List managed profiles
 
+Chat (GraphQL — uses the login username, see HOLDSPORT_CHAT_USERNAME):
+  chats                       List your chat rooms
+  chat <room_id>              Show a room's messages (flags: --limit N)
+
 Escape hatch (for undocumented / write endpoints):
   get <path> [--key val ...]      Raw GET; flags become query params
   request <METHOD> <path> [json]  Raw request with optional JSON body string
@@ -132,10 +139,13 @@ Other:
   help                        Show this help
 
 Environment:
-  HOLDSPORT_USERNAME    Holdsport login (email)
-  HOLDSPORT_PASSWORD    Holdsport password
-  HOLDSPORT_TEAM_ID     Default team id for team-scoped commands
-  HOLDSPORT_BASE_URL    Override API base URL (default: ${DEFAULT_BASE_URL})
+  HOLDSPORT_USERNAME      Holdsport login (email) for the REST API
+  HOLDSPORT_PASSWORD      Holdsport password
+  HOLDSPORT_TEAM_ID       Default team id for team-scoped commands
+  HOLDSPORT_BASE_URL      Override REST API base URL (default: ${DEFAULT_BASE_URL})
+  HOLDSPORT_CHAT_USERNAME Login username for chat (if different from the REST login)
+  HOLDSPORT_GRAPHQL_URL   Override GraphQL endpoint (default: ${DEFAULT_GRAPHQL_URL})
+  HOLDSPORT_ACCESS_TOKEN  Pre-obtained GraphQL token (skips SignIn)
 `;
 
 async function main(argv: string[]): Promise<void> {
@@ -261,6 +271,20 @@ async function main(argv: string[]): Promise<void> {
 
     case "profiles":
       return output(await client.listProfiles(), flags);
+
+    case "chats": {
+      const rooms = await client.listChatRooms();
+      if (flags.json) return print(rooms);
+      return console.log(renderChatRooms(rooms));
+    }
+
+    case "chat": {
+      const roomId = need(positional, 0, "room_id");
+      const limit = flags.limit !== undefined ? Number(flags.limit) : undefined;
+      const room = await client.chatRoom(roomId, limit);
+      if (flags.json) return print(room);
+      return console.log(renderChatTranscript(room));
+    }
 
     case "get": {
       const path = need(positional, 0, "path");

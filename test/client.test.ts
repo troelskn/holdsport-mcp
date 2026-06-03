@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 
-import { type Config, HoldsportClient, loadConfig } from "../src/client.ts";
+import {
+  clearChatTokenCache,
+  type Config,
+  HoldsportClient,
+  loadConfig,
+} from "../src/client.ts";
 
 const baseConfig: Config = {
   username: "u",
@@ -232,5 +237,231 @@ describe("HoldsportClient.headcount", () => {
     });
     expect(hc.total).toBe(3);
     expect(hc.status).toEqual({ Tilmeldt: 2, "(ukendt)": 1 });
+  });
+});
+
+// --- Chat (GraphQL) --------------------------------------------------------
+
+const chatConfig: Config = {
+  ...baseConfig,
+  graphqlUrl: "https://gql.example.test/graphql",
+  chatUsername: "loginname",
+};
+
+const CHAT_ROOMS = [
+  {
+    id: 10,
+    name: "Team chat ",
+    scope: "team",
+    unread_count: 2,
+    activity: null,
+    latest_chat_message: {
+      text: "see you",
+      created_at: { iso8601: "2025-01-10T18:00:00+01:00" },
+      user: { name: "Bo Berg ", firstname: "Bo" },
+    },
+  },
+  {
+    id: 11,
+    name: "Match thread",
+    scope: "activity",
+    unread_count: 0,
+    activity: { id: 555, name: "Match" },
+    latest_chat_message: {
+      text: "older",
+      created_at: { iso8601: "2025-01-09T10:00:00+01:00" },
+      user: { name: "Ann Adler", firstname: "Ann" },
+    },
+  },
+  {
+    id: 12,
+    name: "Empty room",
+    scope: "rooms_users",
+    unread_count: 0,
+    activity: null,
+    latest_chat_message: null,
+  },
+];
+
+// Deliberately out of chronological order to exercise sorting.
+const CHAT_MESSAGES = [
+  {
+    id: 3,
+    text: "third",
+    created_at: { iso8601: "2025-01-10T12:00:00+01:00", to_i: 300 },
+    user: { name: "Cy Cohen", firstname: "Cy" },
+    images: [],
+  },
+  {
+    id: 1,
+    text: "first",
+    created_at: { iso8601: "2025-01-10T10:00:00+01:00", to_i: 100 },
+    user: { name: "Bo Berg", firstname: "Bo" },
+    images: [{ id: 9, url: "https://img/1" }],
+  },
+  {
+    id: 2,
+    text: "second\nline",
+    created_at: { iso8601: "2025-01-10T11:00:00+01:00", to_i: 200 },
+    user: { name: "Ann Adler", firstname: "Ann" },
+    images: [],
+  },
+];
+
+/**
+ * Stub the GraphQL endpoint, dispatching on the operation in the request body.
+ * Returns the number of SignIn calls so tests can assert token memoization.
+ */
+function stubGraphql(opts: { rooms?: unknown; room?: unknown } = {}): {
+  signIns: () => number;
+  requests: () => Array<{ auth?: string; query: string }>;
+} {
+  const requests: Array<{ auth?: string; query: string }> = [];
+  stubFetch((_url, init) => {
+    const body = JSON.parse(String(init.body));
+    requests.push({
+      auth: (init.headers as Record<string, string>)?.Authorization,
+      query: body.query,
+    });
+    if (body.query.includes("SignIn")) {
+      return json({ data: { SignIn: { access_token: "tok-123" } } });
+    }
+    if (body.query.includes("rooms_users_chat_rooms")) {
+      return json({
+        data: {
+          current_user: { id: 1, rooms_users_chat_rooms: opts.rooms ?? CHAT_ROOMS },
+        },
+      });
+    }
+    if (body.query.includes("chat_room")) {
+      return json({ data: { chat_room: opts.room ?? null } });
+    }
+    return json({});
+  });
+  return {
+    signIns: () => requests.filter((r) => r.query.includes("SignIn")).length,
+    requests: () => requests,
+  };
+}
+
+describe("HoldsportClient chat (GraphQL)", () => {
+  let originalFetch: typeof fetch;
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    clearChatTokenCache(); // the token cache is process-level; isolate each test
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    clearChatTokenCache();
+  });
+
+  it("signs in once, then shapes + sorts rooms by last-message time desc", async () => {
+    const spy = stubGraphql();
+    const client = new HoldsportClient(chatConfig);
+    const rooms = await client.listChatRooms();
+
+    expect(spy.signIns()).toBe(1);
+    expect(rooms.map((r) => r.id)).toEqual([10, 11, 12]); // 12 (no message) last
+    expect(rooms[0]).toEqual({
+      id: 10,
+      name: "Team chat",
+      scope: "team",
+      unread_count: 2,
+      last_message: {
+        author: "Bo Berg",
+        text: "see you",
+        time: "2025-01-10T18:00:00+01:00",
+      },
+      activity: null,
+    });
+    expect(rooms[1].activity).toEqual({ id: 555, name: "Match" });
+    expect(rooms[2].last_message).toBeNull();
+  });
+
+  it("sends the SignIn token as a raw Authorization header on the query", async () => {
+    const spy = stubGraphql();
+    await new HoldsportClient(chatConfig).listChatRooms();
+    const query = spy.requests().find((r) => r.query.includes("rooms_users_chat_rooms"));
+    expect(query?.auth).toBe("tok-123"); // raw token, no "Bearer " prefix
+  });
+
+  it("memoizes the token across calls (one SignIn for two reads)", async () => {
+    const spy = stubGraphql({ room: { id: 10, name: "r", scope: "team", unread_count: 0, chat_messages: [] } });
+    const client = new HoldsportClient(chatConfig);
+    await client.listChatRooms();
+    await client.chatRoom(10);
+    expect(spy.signIns()).toBe(1);
+  });
+
+  it("caches across client instances but keys by login username", async () => {
+    const spy = stubGraphql();
+    // Two distinct logins each sign in; reusing a login hits the shared cache.
+    await new HoldsportClient({ ...chatConfig, chatUsername: "alice" }).listChatRooms();
+    await new HoldsportClient({ ...chatConfig, chatUsername: "bob" }).listChatRooms();
+    await new HoldsportClient({ ...chatConfig, chatUsername: "alice" }).listChatRooms();
+    expect(spy.signIns()).toBe(2); // alice + bob; the second alice is a cache hit
+  });
+
+  it("skips SignIn when an access token is configured", async () => {
+    const spy = stubGraphql();
+    await new HoldsportClient({ ...chatConfig, accessToken: "preset" }).listChatRooms();
+    expect(spy.signIns()).toBe(0);
+    const query = spy.requests().find((r) => r.query.includes("rooms_users_chat_rooms"));
+    expect(query?.auth).toBe("preset");
+  });
+
+  it("shapes a room's messages oldest-first with image urls", async () => {
+    stubGraphql({
+      room: {
+        id: 10,
+        name: "Team chat",
+        scope: "team",
+        unread_count: 1,
+        chat_messages: CHAT_MESSAGES,
+      },
+    });
+    const room = await new HoldsportClient(chatConfig).chatRoom("10");
+    expect(room.messages.map((m) => m.id)).toEqual([1, 2, 3]); // sorted by to_i
+    expect(room.messages[0]).toEqual({
+      id: 1,
+      time: "2025-01-10T10:00:00+01:00",
+      author: "Bo Berg",
+      text: "first",
+      images: ["https://img/1"],
+    });
+    expect(room.messages[1].text).toBe("second\nline");
+  });
+
+  it("trims to the most recent N but keeps chronological order", async () => {
+    stubGraphql({
+      room: { id: 10, name: "r", scope: "team", unread_count: 0, chat_messages: CHAT_MESSAGES },
+    });
+    const room = await new HoldsportClient(chatConfig).chatRoom("10", 2);
+    expect(room.messages.map((m) => m.id)).toEqual([2, 3]); // newest two, in order
+  });
+
+  it("throws a clear error on the empty-{} gate response", async () => {
+    stubFetch(() => json({}));
+    await expect(new HoldsportClient(chatConfig).listChatRooms()).rejects.toThrow(
+      /no data|X-App-Version/,
+    );
+  });
+
+  it("surfaces GraphQL errors", async () => {
+    stubFetch(() => json({ errors: [{ message: "nope" }] }));
+    await expect(new HoldsportClient(chatConfig).listChatRooms()).rejects.toThrow(
+      /GraphQL error: nope/,
+    );
+  });
+
+  it("throws when SignIn returns no token", async () => {
+    stubFetch((_url, init) => {
+      const body = JSON.parse(String(init.body));
+      if (body.query.includes("SignIn")) return json({ data: { SignIn: {} } });
+      return json({ data: {} });
+    });
+    await expect(new HoldsportClient(chatConfig).listChatRooms()).rejects.toThrow(
+      /no access_token/,
+    );
   });
 });

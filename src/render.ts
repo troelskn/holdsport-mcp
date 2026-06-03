@@ -6,7 +6,12 @@
  * data and returns a string.
  */
 
-import type { Headcount, RosterEntry } from "./client.ts";
+import type {
+  ChatRoomDetail,
+  ChatRoomSummary,
+  Headcount,
+  RosterEntry,
+} from "./client.ts";
 
 /** Render an aligned text table with a header underline. */
 export function table(headers: string[], rows: string[][]): string {
@@ -116,6 +121,48 @@ export function rosterCsv(rows: RosterEntry[]): string {
     );
   }
   return lines.join("\n");
+}
+
+/** Chat rooms as a table: id, unread, name, and a one-line last-message preview. */
+export function renderChatRooms(rooms: ChatRoomSummary[]): string {
+  if (rooms.length === 0) return "(no chat rooms)";
+  const clip = (s: string, n: number) =>
+    s.length > n ? `${s.slice(0, n - 1)}…` : s;
+  const rows = rooms.map((r) => {
+    const last = r.last_message;
+    const preview = last
+      ? `${last.author ? `${last.author.split(" ")[0]}: ` : ""}${last.text}`
+      : "";
+    return [
+      String(r.id),
+      r.unread_count > 0 ? `●${r.unread_count}` : "",
+      clip(r.name || "(unnamed)", 40),
+      cell(last?.time ?? ""),
+      clip(preview.replace(/\s+/g, " ").trim(), 50),
+    ];
+  });
+  const body = table(["Id", "Unread", "Name", "Last", "Preview"], rows);
+  return `${body}\n\n${rooms.length} rooms`;
+}
+
+/** A chat room as a transcript: a header line then one block per message. */
+export function renderChatTranscript(room: ChatRoomDetail): string {
+  const header =
+    `# ${room.name || "(unnamed)"}  [${room.scope}]  room ${room.id}` +
+    (room.unread_count > 0 ? `  (${room.unread_count} unread)` : "");
+  if (room.messages.length === 0) return `${header}\n\n(no messages)`;
+
+  const lines = [header, ""];
+  for (const m of room.messages) {
+    const who = m.author || "(unknown)";
+    lines.push(`[${cell(m.time)}] ${who}`);
+    if (m.text) {
+      for (const line of m.text.split("\n")) lines.push(`  ${line}`);
+    }
+    for (const url of m.images) lines.push(`  [image] ${url}`);
+    lines.push("");
+  }
+  return lines.join("\n").trimEnd();
 }
 
 /** Headcount as an indented status tally, optionally listing each name. */

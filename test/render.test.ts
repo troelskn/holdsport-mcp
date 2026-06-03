@@ -1,10 +1,17 @@
 import { describe, expect, it } from "bun:test";
 
-import type { Headcount, RosterEntry } from "../src/client.ts";
+import type {
+  ChatRoomDetail,
+  ChatRoomSummary,
+  Headcount,
+  RosterEntry,
+} from "../src/client.ts";
 import {
   cell,
   csvField,
   isScalar,
+  renderChatRooms,
+  renderChatTranscript,
   renderHeadcount,
   renderHuman,
   rosterCsv,
@@ -140,5 +147,82 @@ describe("renderHeadcount", () => {
     expect(out).toContain("- Bo");
     expect(out).toContain("- Cy");
     expect(out).toContain("- Ann");
+  });
+});
+
+describe("renderChatRooms", () => {
+  const rooms: ChatRoomSummary[] = [
+    {
+      id: 10,
+      name: "Team chat",
+      scope: "team",
+      unread_count: 2,
+      last_message: {
+        author: "Bo Berg",
+        text: "see you there",
+        time: "2025-01-10T18:00:00+01:00",
+      },
+      activity: null,
+    },
+    {
+      id: 12,
+      name: "Empty room",
+      scope: "rooms_users",
+      unread_count: 0,
+      last_message: null,
+      activity: null,
+    },
+  ];
+
+  it("renders a row per room with unread marker and first-name preview", () => {
+    const out = renderChatRooms(rooms);
+    expect(out).toContain("Team chat");
+    expect(out).toContain("●2"); // unread marker
+    expect(out).toContain("Bo: see you there"); // first name + text
+    expect(out).toContain("10-01-2025 18:00"); // formatted time
+    expect(out).toContain("2 rooms");
+  });
+
+  it("handles no rooms", () => {
+    expect(renderChatRooms([])).toBe("(no chat rooms)");
+  });
+});
+
+describe("renderChatTranscript", () => {
+  const room: ChatRoomDetail = {
+    id: 10,
+    name: "Team chat",
+    scope: "team",
+    unread_count: 1,
+    messages: [
+      {
+        id: 1,
+        time: "2025-01-10T10:00:00+01:00",
+        author: "Bo Berg",
+        text: "first\nwith two lines",
+        images: ["https://img/1"],
+      },
+      {
+        id: 2,
+        time: "2025-01-10T11:00:00+01:00",
+        author: "Ann Adler",
+        text: "reply",
+        images: [],
+      },
+    ],
+  };
+
+  it("renders a header and one block per message", () => {
+    const out = renderChatTranscript(room);
+    expect(out).toContain("# Team chat  [team]  room 10  (1 unread)");
+    expect(out).toContain("[10-01-2025 10:00] Bo Berg");
+    expect(out).toContain("  first");
+    expect(out).toContain("  with two lines"); // multi-line text indented
+    expect(out).toContain("  [image] https://img/1");
+    expect(out).toContain("[10-01-2025 11:00] Ann Adler");
+  });
+
+  it("notes an empty room", () => {
+    expect(renderChatTranscript({ ...room, messages: [] })).toContain("(no messages)");
   });
 });
