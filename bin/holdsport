@@ -114,25 +114,24 @@ Output is human-readable by default; add --json for raw JSON (roster also has --
 Credentials default to the environment (below); override per call with
 --user <login> / --pass <password>. Use the login username (not email/member number).
 
+List commands take an optional id to show one item instead (e.g. activities 1234).
+
 Core commands:
   teams                       List the teams you belong to
-  members                     List the team's members (raw JSON)
-  member <member_id>          Show a single member
+  members [member_id]         List the team's members; with an id, show that member
   roster                      Contact list: name/role/mobile/email
                                 flags: --players, --staff, --csv
   notes                       List the team's notes
-  activities [date]           Upcoming activities: type, place, sign-up count
-                                (date = YYYY-MM-DD, from that day on; flags: --page N)
-  activity <activity_id>      One activity + attendance breakdown (flags: --names)
+  activities [date|id]        Upcoming activities: type, place, sign-up count
+                                (date YYYY-MM-DD = from that day; flags: --page N)
+                                with an id: that activity + attendance (flags: --names)
   tasks <activity_id>         List an activity's tasks
   user                        Show the current user profile
   profiles                    List managed profiles
 
 Chat & email:
-  chats                       List your chat rooms
-  chat <room_id>              Show a room's messages (flags: --limit N)
-  emails                      List your inbox (flags: --sent, --limit N)
-  email <email_id>            Show a single email (subject, body, attachments)
+  chats [room_id]             List your chat rooms; with an id, show that room (flags: --limit N)
+  emails [email_id]           List your inbox (flags: --sent, --limit N); with an id, show that email
 
 Other:
   help                        Show this help
@@ -174,30 +173,21 @@ async function main(argv: string[]): Promise<void> {
         fields: ["id", "name", "role"],
       });
 
-    case "members":
-      return output(await client.listMembers(teamOf(flags)), flags, {
-        fields: [
-          "id",
-          "firstname",
-          "lastname",
-          "role",
-          "birthday",
-          "member_number",
-        ],
-      });
-
-    case "member": {
-      const memberId = need(positional, 0, "member_id");
-      return output(await client.getMember(memberId, teamOf(flags)), flags, {
-        fields: [
-          "id",
-          "firstname",
-          "lastname",
-          "role",
-          "birthday",
-          "member_number",
-        ],
-      });
+    case "members": {
+      const fields = [
+        "id",
+        "firstname",
+        "lastname",
+        "role",
+        "birthday",
+        "member_number",
+      ];
+      const memberId = positional[0];
+      // With an id, show that one member; otherwise list them all.
+      const data = memberId
+        ? await client.getMember(memberId, teamOf(flags))
+        : await client.listMembers(teamOf(flags));
+      return output(data, flags, { fields });
     }
 
     case "roster": {
@@ -216,20 +206,20 @@ async function main(argv: string[]): Promise<void> {
       });
 
     case "activities": {
+      // A YYYY-MM-DD arg is a list start-date; any other arg is an activity id.
+      const arg = positional[0];
+      if (arg !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(arg)) {
+        const detail = await client.getActivity(arg);
+        if (flags.json) return print(detail);
+        return console.log(renderActivity(detail, { names: Boolean(flags.names) }));
+      }
       const rows = await client.listActivities({
         teamId: teamOf(flags),
-        date: positional[0],
+        date: arg,
         page: flags.page !== undefined ? Number(flags.page) : undefined,
       });
       if (flags.json) return print(rows);
       return console.log(renderActivities(rows));
-    }
-
-    case "activity": {
-      const activityId = need(positional, 0, "activity_id");
-      const detail = await client.getActivity(activityId);
-      if (flags.json) return print(detail);
-      return console.log(renderActivity(detail, { names: Boolean(flags.names) }));
     }
 
     case "tasks": {
@@ -246,34 +236,31 @@ async function main(argv: string[]): Promise<void> {
       return output(await client.listProfiles(), flags);
 
     case "chats": {
+      // With a room id, show that room's transcript; otherwise list rooms.
+      const roomId = positional[0];
+      if (roomId !== undefined) {
+        const limit = flags.limit !== undefined ? Number(flags.limit) : undefined;
+        const room = await client.chatRoom(roomId, limit);
+        if (flags.json) return print(room);
+        return console.log(renderChatTranscript(room));
+      }
       const rooms = await client.listChatRooms();
       if (flags.json) return print(rooms);
       return console.log(renderChatRooms(rooms));
     }
 
-    case "chat": {
-      const roomId = need(positional, 0, "room_id");
-      const limit = flags.limit !== undefined ? Number(flags.limit) : undefined;
-      const room = await client.chatRoom(roomId, limit);
-      if (flags.json) return print(room);
-      return console.log(renderChatTranscript(room));
-    }
-
     case "emails": {
+      // With an email id, show that email; otherwise list the inbox/sent box.
+      const emailId = positional[0];
+      if (emailId !== undefined) {
+        const email = await client.getEmail(emailId);
+        if (flags.json) return print(email);
+        return console.log(renderEmail(email));
+      }
       const limit = flags.limit !== undefined ? Number(flags.limit) : undefined;
-      const emails = await client.listEmails({
-        sent: Boolean(flags.sent),
-        limit,
-      });
+      const emails = await client.listEmails({ sent: Boolean(flags.sent), limit });
       if (flags.json) return print(emails);
       return console.log(renderEmails(emails));
-    }
-
-    case "email": {
-      const emailId = need(positional, 0, "email_id");
-      const email = await client.getEmail(emailId);
-      if (flags.json) return print(email);
-      return console.log(renderEmail(email));
     }
 
     default:

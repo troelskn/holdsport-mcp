@@ -34,14 +34,16 @@ bun bin/holdsport help
 bun bin/holdsport teams
 bun bin/holdsport roster --players --csv
 bun bin/holdsport activities 2026-06-01
-bun bin/holdsport activity <activity_id> --names
+bun bin/holdsport activities <activity_id> --names
 bun bin/holdsport chats
-bun bin/holdsport chat <room_id> --limit 20
+bun bin/holdsport chats <room_id> --limit 20
 bun bin/holdsport emails --limit 20
-bun bin/holdsport email <email_id>
+bun bin/holdsport emails <email_id>
 ```
 
 Team-scoped commands default to `HOLDSPORT_TEAM_ID`; override per call with `--team <id>`. Output is human-readable by default; add `--json` (the `roster` command also has `--csv`). The CLI is read-only and exposes only the named read commands — there is no raw-request escape hatch.
+
+The list commands are plural and take an optional id to show a single item instead: `members 1234`, `activities 1234`, `chats 1234`, `emails 1234`. (The MCP server keeps these as separate `members`/`member`, `activities`/`activity`, … tools.)
 
 Credentials default to the environment but can be overridden per call with `--user <login>` / `--pass <password>` (the login username covers REST and chat/email alike).
 
@@ -49,11 +51,11 @@ Credentials default to the environment but can be overridden per call with `--us
 
 Chat, email, and activities are **not** part of the REST API — they live on a separate GraphQL endpoint (`https://www.holdsport.dk/graphql`) with its own auth, reverse-engineered in [`CHAT_API.md`](CHAT_API.md). The client handles this transparently: it sends the required `X-App-Version` header, runs a `SignIn` mutation to mint a token, and reuses it for the read queries. These commands and tools (`chats` / `chat` / `emails` / `email` / `activities` / `activity`) are GraphQL, and all are read-only.
 
-`chats` lists both your ad-hoc rooms (the ones you're directly added to) and the team-scoped rooms — team, coach, and parent chats — across all your teams, just like the app. `chat <room_id>` shows any room's transcript by id, whatever its scope.
+`chats` lists both your ad-hoc rooms (the ones you're directly added to) and the team-scoped rooms — team, coach, and parent chats — across all your teams, just like the app. `chats <room_id>` shows any room's transcript by id, whatever its scope.
 
-`emails` lists your inbox most-recent first (subject, sender, date, read state; `--sent` for the sent box); `email <id>` shows one email's body and attachments. Note that bulk-email bodies are stored as HTML, so `email` content may contain HTML and merge placeholders like `{{ fornavn }}`.
+`emails` lists your inbox most-recent first (subject, sender, date, read state; `--sent` for the sent box); `emails <email_id>` shows one email's body and attachments. Note that bulk-email bodies are stored as HTML, so the content may contain HTML and merge placeholders like `{{ fornavn }}`.
 
-`activities [date]` lists a team's upcoming activities (type, place, sign-up count), paginated with `--page`. `activity <id>` shows one activity with a full attendance breakdown — counts plus, with `--names`, the named attending / not-attending / no-answer lists.
+`activities [date]` lists a team's upcoming activities (type, place, sign-up count), paginated with `--page`. `activities <activity_id>` shows one activity with a full attendance breakdown — counts plus, with `--names`, the named attending / not-attending / no-answer lists.
 
 `SignIn` requires the **login username** (e.g. `troelsknaknielsen`) — not the email or member number. Since REST Basic auth also accepts the login username, a single `HOLDSPORT_USERNAME` set to it works for every command.
 
