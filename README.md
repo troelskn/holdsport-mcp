@@ -99,6 +99,8 @@ bun bin/holdsport-mcp
 
 The host (or the model) provides `username`/`password` with each tool call.
 
+See also: [https://coworkerai.io/guide/mcp-setup](https://coworkerai.io/guide/mcp-setup)
+
 ### Tools
 
 `teams`, `members`, `member`, `roster`, `notes`, `activities`, `activity`, `tasks`, `user`, `profiles`, `chats`, `chat`, `emails`, and `email`. Every tool requires `username` and `password`; team-scoped tools also need a `team_id`. The GraphQL tools (`chats`, `chat`, `emails`, `email`, `activities`, `activity`) authenticate over GraphQL, so their `username` must be the **login username**, not the email.
