@@ -26,8 +26,23 @@ import {
 } from "../src/render.ts";
 
 describe("cell", () => {
-  it("formats ISO timestamps as Danish date-time", () => {
-    expect(cell("2026-06-01T18:30:00Z")).toBe("01-06-2026 18:30");
+  it("converts UTC instants to Danish local time (CEST in summer)", () => {
+    // 18:30Z in June is CEST (+02:00) → 20:30
+    expect(cell("2026-06-01T18:30:00Z")).toBe("01-06-2026 20:30");
+  });
+
+  it("converts UTC instants to Danish local time (CET in winter)", () => {
+    // 18:30Z in January is CET (+01:00) → 19:30
+    expect(cell("2026-01-15T18:30:00Z")).toBe("15-01-2026 19:30");
+  });
+
+  it("honours an explicit offset, normalising to Danish time", () => {
+    // 22:00 at +00:00 is 23:00 in CET
+    expect(cell("2026-01-15T22:00:00+00:00")).toBe("15-01-2026 23:00");
+  });
+
+  it("reformats a zone-less timestamp without shifting it", () => {
+    expect(cell("2026-06-04T16:10:00")).toBe("04-06-2026 16:10");
   });
 
   it("renders null/undefined as empty", () => {

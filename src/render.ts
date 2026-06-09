@@ -35,10 +35,38 @@ export function csvField(value: string): string {
   return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }
 
+// The club runs on Danish time; the API hands back instants in UTC (`Z`). We show
+// them in this zone so an activity reads at its wall-clock time, not UTC — and so
+// it's stable wherever the CLI or MCP server runs (e.g. a UTC container).
+const DISPLAY_TZ = "Europe/Copenhagen";
+const displayParts = new Intl.DateTimeFormat("en-GB", {
+  timeZone: DISPLAY_TZ,
+  hourCycle: "h23",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+/** Format an instant as Danish `DD-MM-YYYY HH:MM` in {@link DISPLAY_TZ}. */
+function formatInstant(date: Date): string {
+  const p: Record<string, string> = {};
+  for (const { type, value } of displayParts.formatToParts(date)) p[type] = value;
+  return `${p.day}-${p.month}-${p.year} ${p.hour}:${p.minute}`;
+}
+
 /** Stringify a scalar for display; ISO timestamps become Danish DD-MM-YYYY HH:MM. */
 export function cell(value: unknown): string {
   if (value === null || value === undefined) return "";
   const s = String(value);
+  // A timestamp carrying an explicit zone (Z or ±HH:MM) is a real instant: show
+  // it in Danish local time.
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/.test(s)) {
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime())) return formatInstant(d);
+  }
+  // A zone-less timestamp is ambiguous — reformat the text without shifting it.
   const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
   if (iso) return `${iso[3]}-${iso[2]}-${iso[1]} ${iso[4]}:${iso[5]}`;
   return s.replace(/\s+/g, " ").trim();
