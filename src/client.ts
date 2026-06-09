@@ -155,6 +155,17 @@ export interface EmailDetail {
 // Activities/attendance run over GraphQL: the list carries a live sign-up count
 // per activity, and the detail returns the full attendance breakdown by name.
 
+/** Today's date as `YYYY-MM-DD` in the machine's local timezone. Using local
+ * rather than UTC keeps "today" aligned with the wall clock — a UTC date can sit
+ * a day off near midnight, which would drop or add a day's activities. */
+function localToday(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 /** An activity as shown in the list, shaped for humans. */
 export interface ActivitySummary {
   id: number;
@@ -326,13 +337,16 @@ const ACTIVITY_FIELDS = `
     attendee_count`;
 
 /**
- * The team's upcoming activities, paginated and grouped by the server. We read
- * `future_activities_groups` (from `filter_start_date` onward) and flatten it.
+ * The team's activities from `filter_start_date` onward, paginated and grouped
+ * by the server. We read `activities_groups` — which filters by date, so it
+ * keeps activities whose day is today even once they've started — and flatten
+ * it. (The sibling `future_activities_groups` cuts off at the current moment
+ * instead, hiding an activity that's happening right now.) Pages are 0-indexed.
  */
 const LIST_ACTIVITIES = `query ListActivities($team: String, $start: String, $page: Int) {
   activities_page(team_id: $team, filter_start_date: $start, page: $page) {
     current_page
-    future_activities_groups {
+    activities_groups {
       activities {${ACTIVITY_FIELDS}
       }
     }
@@ -784,25 +798,26 @@ export class HoldsportClient {
   // --- Activities (GraphQL) ------------------------------------------------
 
   /**
-   * The team's upcoming activities, one page at a time, from `date` onward
-   * (defaults to today). Each row carries its event type, place, and a live
-   * sign-up count.
+   * The team's activities, one page at a time, from `date` onward (defaults to
+   * today, in local time). Filtering is by date, so today's activities show up
+   * even after they've started. Each row carries its event type, place, and a
+   * live sign-up count. `page` is 1-based for callers; the server is 0-based.
    */
   async listActivities(
     opts: { teamId?: string; date?: string; page?: number } = {},
   ): Promise<ActivitySummary[]> {
     const team = this.resolveTeam(opts.teamId);
-    const start = opts.date ?? new Date().toISOString().slice(0, 10);
+    const start = opts.date ?? localToday();
     const data = await this.graphql(LIST_ACTIVITIES, {
       team,
       start,
-      page: opts.page ?? 1,
+      page: (opts.page ?? 1) - 1,
     });
     const page = data.activities_page as {
-      future_activities_groups?: Array<{ activities?: RawActivity[] }>;
+      activities_groups?: Array<{ activities?: RawActivity[] }>;
     } | null;
 
-    return (page?.future_activities_groups ?? [])
+    return (page?.activities_groups ?? [])
       .flatMap((g) => g.activities ?? [])
       .map(
         (a): ActivitySummary => ({

@@ -256,14 +256,15 @@ function stubGraphql(
   } = {},
 ): {
   signIns: () => number;
-  requests: () => Array<{ auth?: string; query: string }>;
+  requests: () => Array<{ auth?: string; query: string; variables?: any }>;
 } {
-  const requests: Array<{ auth?: string; query: string }> = [];
+  const requests: Array<{ auth?: string; query: string; variables?: any }> = [];
   stubFetch((_url, init) => {
     const body = JSON.parse(String(init.body));
     requests.push({
       auth: (init.headers as Record<string, string>)?.Authorization,
       query: body.query,
+      variables: body.variables,
     });
     if (body.query.includes("SignIn")) {
       return json({ data: { SignIn: { access_token: "tok-123" } } });
@@ -295,8 +296,8 @@ function stubGraphql(
       return json({
         data: {
           activities_page: {
-            current_page: 1,
-            future_activities_groups: opts.activityGroups ?? [],
+            current_page: 0,
+            activities_groups: opts.activityGroups ?? [],
           },
         },
       });
@@ -608,10 +609,23 @@ describe("HoldsportClient activities (GraphQL)", () => {
       attendee_count: 22,
     });
     expect(rows[1].is_cancelled).toBe(true);
-    // the paginated activities query was issued
-    expect(
-      spy.requests().some((r) => r.query.includes("activities_page")),
-    ).toBe(true);
+    // the paginated activities query was issued, reading the date-filtered
+    // `activities_groups` (not the now-cutoff `future_activities_groups`)
+    const req = spy.requests().find((r) => r.query.includes("activities_page"));
+    expect(req?.query).toContain("activities_groups");
+    expect(req?.query).not.toContain("future_activities_groups");
+    // page defaults to the server's first page, which is 0-indexed
+    expect(req?.variables.page).toBe(0);
+  });
+
+  it("maps the caller's 1-based page onto the server's 0-based page", async () => {
+    const spy = stubGraphql({ activityGroups: [] });
+    await new HoldsportClient(chatConfig).listActivities({
+      teamId: "37141",
+      page: 2,
+    });
+    const req = spy.requests().find((r) => r.query.includes("activities_page"));
+    expect(req?.variables.page).toBe(1);
   });
 
   it("shapes the attendance breakdown and counts", async () => {
