@@ -11,6 +11,11 @@
  *    token echoed back in a raw `Authorization` header — all reverse-engineered
  *    from the mobile app.
  *
+ * Everything is read-only except two deliberate write paths: `createActivity`
+ * and `updateActivity` (GraphQL `ChangeCurrentTeam` + `CreateActivity` /
+ * `UpdateActivity`, with the team switch verified before writing). There is
+ * still no raw-request escape hatch.
+ *
  * Nothing in here writes to the terminal or calls process.exit: methods return
  * plain JS data and throw `Error` on failure, so each front-end decides how to
  * surface results and errors (the CLI prints + exits; the MCP server maps throws
@@ -175,10 +180,133 @@ export interface ActivitySummary {
   /** ISO-8601 end timestamp. */
   end_time: string;
   place: string;
+  /** Meeting time (Mødetid), team-local `HH:MM`; empty when not set. */
+  meeting_time: string;
   event_type: string;
   is_cancelled: boolean;
   /** How many have signed up (players + coaches). */
   attendee_count: number;
+}
+
+/** An event type a team's activities can be filed under. */
+export interface EventType {
+  id: number;
+  name: string;
+  color: string;
+}
+
+/**
+ * Fields for a new activity. Dates are `YYYY-MM-DD`; times are `HH:MM`
+ * (24-hour), interpreted by the server in the team's local timezone.
+ */
+export interface NewActivity {
+  name: string;
+  /** Start date, `YYYY-MM-DD`. */
+  date: string;
+  /** Start time, `HH:MM` (24-hour). */
+  start_time: string;
+  end_time?: string;
+  /** End date for multi-day activities; the server defaults to the start date. */
+  end_date?: string;
+  /** Meeting time (Mødetid), `HH:MM` — the API's `pickup_time`. */
+  meeting_time?: string;
+  /** See {@link HoldsportClient.listEventTypes} for the valid ids. */
+  event_type_id?: number;
+  place?: string;
+  comment?: string;
+  max_attendees?: number;
+}
+
+/**
+ * An activity's current editable fields (converted to team-local wall clock)
+ * plus the context an edit needs: the owning team and the repeat flag.
+ */
+export interface ActivityForEdit {
+  id: number;
+  team: { id: number; name: string } | null;
+  /** Part of a repeating series — edits need an explicit repeat scope. */
+  is_repeated: boolean;
+  /** Payment activity — {@link HoldsportClient.updateActivity} refuses these. */
+  is_payment: boolean;
+  fields: NewActivity;
+  /**
+   * Current values of the server-assigned fields *outside* {@link NewActivity},
+   * keyed by mutation input name. `UpdateActivity` NULLs every column whose
+   * input field is omitted (verified the hard way: an update without
+   * `activity_type` died on the column's NOT NULL constraint), so these must be
+   * echoed back verbatim on every update. Fields that are currently null are
+   * left out — omitting them re-assigns NULL, a no-op.
+   */
+  passthrough: Record<string, unknown>;
+}
+
+// The API returns instants in UTC, but `CreateActivityInput`/`UpdateActivityInput`
+// want wall-clock date + time strings, which the server reads in the team's
+// timezone. The club runs on Danish time (same hardcoding, with the same
+// rationale, as src/render.ts), so editable fields convert through this zone.
+const TEAM_TZ = "Europe/Copenhagen";
+const wallClockParts = new Intl.DateTimeFormat("en-GB", {
+  timeZone: TEAM_TZ,
+  hourCycle: "h23",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+/** Split a UTC instant into team-local `YYYY-MM-DD` + `HH:MM`. */
+function toWallClock(iso: string): { date: string; time: string } {
+  const p: Record<string, string> = {};
+  for (const { type, value } of wallClockParts.formatToParts(new Date(iso))) {
+    p[type] = value;
+  }
+  return {
+    date: `${p.year}-${p.month}-${p.day}`,
+    time: `${p.hour}:${p.minute}`,
+  };
+}
+
+/**
+ * Throw if a new activity's fields are malformed. Runs client-side before any
+ * network call (and powers the CLI's dry-run preview), so a payload the server
+ * might misread never reaches production. The GraphQL schema types these as
+ * bare Strings; the formats below match the ones the API emits elsewhere
+ * (`filter_start_date` is `YYYY-MM-DD`) and the app's 24-hour clock.
+ */
+export function validateNewActivity(a: NewActivity): void {
+  const date = /^\d{4}-\d{2}-\d{2}$/;
+  const time = /^([01]\d|2[0-3]):[0-5]\d$/;
+  if (!a.name.trim()) throw new Error("activity name must not be empty");
+  if (!date.test(a.date)) {
+    throw new Error(`start date must be YYYY-MM-DD, got "${a.date}"`);
+  }
+  if (!time.test(a.start_time)) {
+    throw new Error(
+      `start time must be HH:MM (24-hour), got "${a.start_time}"`,
+    );
+  }
+  if (a.end_time !== undefined && !time.test(a.end_time)) {
+    throw new Error(`end time must be HH:MM (24-hour), got "${a.end_time}"`);
+  }
+  if (a.end_date !== undefined && !date.test(a.end_date)) {
+    throw new Error(`end date must be YYYY-MM-DD, got "${a.end_date}"`);
+  }
+  if (a.meeting_time !== undefined && !time.test(a.meeting_time)) {
+    throw new Error(
+      `meeting time must be HH:MM (24-hour), got "${a.meeting_time}"`,
+    );
+  }
+  // HH:MM compares correctly as a string; only guard same-day activities.
+  if (
+    a.end_time !== undefined &&
+    (a.end_date === undefined || a.end_date === a.date) &&
+    a.end_time <= a.start_time
+  ) {
+    throw new Error(
+      `end time ${a.end_time} is not after start time ${a.start_time}`,
+    );
+  }
 }
 
 /** A single activity with its full attendance breakdown, shaped for humans. */
@@ -188,6 +316,8 @@ export interface ActivityDetail {
   time: string;
   end_time: string;
   place: string;
+  /** Meeting time (Mødetid), team-local `HH:MM`; empty when not set. */
+  meeting_time: string;
   comment: string;
   event_type: string;
   is_cancelled: boolean;
@@ -330,6 +460,7 @@ const ACTIVITY_FIELDS = `
     id
     name
     place
+    pickup_time
     is_cancelled
     starttime { iso8601 }
     endtime { iso8601 }
@@ -369,16 +500,176 @@ const SHOW_ACTIVITY = `query ShowActivity($id: Int!) {
   }
 }`;
 
+/** The event types a team's activities can be filed under. */
+const LIST_EVENT_TYPES = `query ListEventTypes($team: Int) {
+  activities_event_types(team_id: $team) {
+    id
+    name
+    color
+  }
+}`;
+
+/**
+ * Switch the session's current team. `CreateActivity` takes no team argument —
+ * it applies to whichever team is current — so creating must switch first and
+ * verify the `team` echoed back before writing anything.
+ */
+const CHANGE_CURRENT_TEAM = `mutation ChangeCurrentTeam($team: Int!) {
+  ChangeCurrentTeam(input: { team_id: $team }) {
+    team { id name }
+  }
+}`;
+
+/**
+ * Create an activity on the current team. The input type has many more fields
+ * (payments, repeats, reminders, …); only the subset in {@link NewActivity} is
+ * exposed. The mutation returns the created activity, echoed back below so the
+ * caller can show exactly what production now has.
+ */
+const CREATE_ACTIVITY = `mutation CreateActivity($input: CreateActivityInput!) {
+  CreateActivity(input: $input) {
+    activity {${ACTIVITY_FIELDS}
+    }
+  }
+}`;
+
+/**
+ * The current values of an activity's editable fields, plus the context an edit
+ * needs: the owning team (to switch to before writing) and whether the activity
+ * is part of a repeating series (which edits refuse to touch).
+ */
+const SHOW_ACTIVITY_FOR_EDIT = `query ShowActivityForEdit($id: Int!) {
+  activity(id: $id) {
+    id
+    name
+    place
+    comment
+    pickup_time
+    starttime { iso8601 }
+    endtime { iso8601 }
+    event_type { id }
+    max_attender
+    teams { id name }
+    is_repeated_activity
+    is_root_of_repeated_activities
+    has_future_repeated_activities
+    is_payment_activity
+    type
+    reminder2
+    reminder5
+    hide_unattend
+    ride_enabled
+    ride_comment
+    only_player_participation_counts
+    has_waiting_list
+    hide_activity_players_registration
+    pickup_place
+    rating
+    absolute_registration_deadline { iso8601 }
+    registration_start_at { iso8601 }
+  }
+}`;
+
+/**
+ * Update an activity. The input mirrors `CreateActivityInput` plus the target
+ * `id`; like create, it applies against the session's current team, so the
+ * caller switches (and verifies) first.
+ */
+const UPDATE_ACTIVITY = `mutation UpdateActivity($input: UpdateActivityInput!) {
+  UpdateActivity(input: $input) {
+    activity {${ACTIVITY_FIELDS}
+    }
+  }
+}`;
+
 /** Raw GraphQL shape of an activity row, before shaping. */
 interface RawActivity {
   id: number;
   name?: string;
   place?: string;
+  pickup_time?: string | null;
   is_cancelled?: boolean;
   starttime?: { iso8601?: string } | null;
   endtime?: { iso8601?: string } | null;
   event_type?: { name?: string } | null;
   attendee_count?: number;
+}
+
+/** Shape a raw GraphQL activity row for humans. */
+function toActivitySummary(a: RawActivity): ActivitySummary {
+  return {
+    id: a.id,
+    name: (a.name ?? "").trim(),
+    time: a.starttime?.iso8601 ?? "",
+    end_time: a.endtime?.iso8601 ?? "",
+    place: (a.place ?? "").trim(),
+    meeting_time: (a.pickup_time ?? "").trim(),
+    event_type: (a.event_type?.name ?? "").trim(),
+    is_cancelled: a.is_cancelled ?? false,
+    attendee_count: a.attendee_count ?? 0,
+  };
+}
+
+/** Raw GraphQL shape of the for-edit activity read, before shaping. */
+interface RawActivityForEdit {
+  id: number;
+  name?: string;
+  place?: string | null;
+  comment?: string | null;
+  pickup_time?: string | null;
+  starttime?: { iso8601?: string } | null;
+  endtime?: { iso8601?: string } | null;
+  event_type?: { id?: number } | null;
+  max_attender?: number | null;
+  teams?: Array<{ id: number; name?: string }> | null;
+  is_repeated_activity?: boolean;
+  is_root_of_repeated_activities?: boolean;
+  has_future_repeated_activities?: boolean;
+  is_payment_activity?: boolean;
+  type?: number | null;
+  reminder2?: number | null;
+  reminder5?: number | null;
+  hide_unattend?: boolean | null;
+  ride_enabled?: boolean | null;
+  ride_comment?: string | null;
+  only_player_participation_counts?: boolean | null;
+  has_waiting_list?: boolean | null;
+  hide_activity_players_registration?: boolean | null;
+  pickup_place?: string | null;
+  rating?: string | null;
+  absolute_registration_deadline?: { iso8601?: string } | null;
+  registration_start_at?: { iso8601?: string } | null;
+}
+
+/**
+ * Map {@link NewActivity} onto the field names of `CreateActivityInput` /
+ * `UpdateActivityInput`, omitting fields that weren't given.
+ *
+ * Date + time go combined into `start_time` / `end_time`: the resolvers ignore
+ * the separate `start_date` / `end_date` input fields and parse the time
+ * fields as full datetimes — a bare "HH:MM" lands on TODAY's date (verified
+ * against production for both create and update).
+ */
+function activityInput(activity: NewActivity): Record<string, unknown> {
+  const input: Record<string, unknown> = {
+    name: activity.name.trim(),
+    start_time: `${activity.date} ${activity.start_time}`,
+  };
+  if (activity.end_time !== undefined) {
+    input.end_time = `${activity.end_date ?? activity.date} ${activity.end_time}`;
+  }
+  if (activity.meeting_time !== undefined) {
+    input.pickup_time = activity.meeting_time;
+  }
+  if (activity.event_type_id !== undefined) {
+    input.event_type_id = activity.event_type_id;
+  }
+  if (activity.place !== undefined) input.place = activity.place;
+  if (activity.comment !== undefined) input.comment = activity.comment;
+  if (activity.max_attendees !== undefined) {
+    input.max_number_of_attendees = activity.max_attendees;
+  }
+  return input;
 }
 
 /** Raw GraphQL shape of the rich activity detail, before shaping. */
@@ -481,9 +772,7 @@ export class HoldsportClient {
   }
 
   getMember(memberId: string, teamId?: string): Promise<unknown> {
-    return this.get(
-      `teams/${this.resolveTeam(teamId)}/members/${memberId}`,
-    );
+    return this.get(`teams/${this.resolveTeam(teamId)}/members/${memberId}`);
   }
 
   /** Contact list shaped for humans: name/role/mobile/email per member. */
@@ -491,9 +780,7 @@ export class HoldsportClient {
     teamId?: string,
     opts: { players?: boolean; staff?: boolean } = {},
   ): Promise<RosterEntry[]> {
-    const data = await this.get(
-      `teams/${this.resolveTeam(teamId)}/members`,
-    );
+    const data = await this.get(`teams/${this.resolveTeam(teamId)}/members`);
     let members = (Array.isArray(data) ? data : []) as MemberRecord[];
 
     if (opts.players) members = members.filter((m) => m.role === 1);
@@ -582,10 +869,15 @@ export class HoldsportClient {
     const text = await res.text();
 
     if (!res.ok) {
-      throw new Error(`HTTP ${res.status} ${res.statusText} for GraphQL\n${text}`);
+      throw new Error(
+        `HTTP ${res.status} ${res.statusText} for GraphQL\n${text}`,
+      );
     }
 
-    let body: { data?: Record<string, unknown>; errors?: Array<{ message?: string }> };
+    let body: {
+      data?: Record<string, unknown>;
+      errors?: Array<{ message?: string }>;
+    };
     try {
       body = JSON.parse(text);
     } catch {
@@ -630,7 +922,8 @@ export class HoldsportClient {
       { username, password: this.config.password },
       { authenticated: false },
     );
-    const token = (data.SignIn as { access_token?: string } | null)?.access_token;
+    const token = (data.SignIn as { access_token?: string } | null)
+      ?.access_token;
     if (!token) {
       throw new Error(
         "SignIn returned no access_token. Chat/email needs the login username " +
@@ -694,7 +987,10 @@ export class HoldsportClient {
    * keeps only the most recent N messages (still shown chronologically); the
    * GraphQL API has no server-side limit, so this trims client-side.
    */
-  async chatRoom(roomId: string | number, limit?: number): Promise<ChatRoomDetail> {
+  async chatRoom(
+    roomId: string | number,
+    limit?: number,
+  ): Promise<ChatRoomDetail> {
     const data = await this.graphql(SHOW_CHAT_ROOM, { id: Number(roomId) });
     const room = data.chat_room as {
       id: number;
@@ -718,9 +1014,7 @@ export class HoldsportClient {
         ts: m.created_at?.to_i ?? 0,
         author: (m.user?.name ?? m.user?.firstname ?? "").trim(),
         text: m.text ?? "",
-        images: (m.images ?? [])
-          .map((img) => img.url ?? "")
-          .filter((u) => u),
+        images: (m.images ?? []).map((img) => img.url ?? "").filter((u) => u),
       }))
       .sort((a, b) => a.ts - b.ts);
 
@@ -819,19 +1113,256 @@ export class HoldsportClient {
 
     return (page?.activities_groups ?? [])
       .flatMap((g) => g.activities ?? [])
-      .map(
-        (a): ActivitySummary => ({
-          id: a.id,
-          name: (a.name ?? "").trim(),
-          time: a.starttime?.iso8601 ?? "",
-          end_time: a.endtime?.iso8601 ?? "",
-          place: (a.place ?? "").trim(),
-          event_type: (a.event_type?.name ?? "").trim(),
-          is_cancelled: a.is_cancelled ?? false,
-          attendee_count: a.attendee_count ?? 0,
-        }),
-      )
+      .map(toActivitySummary)
       .sort((a, b) => a.time.localeCompare(b.time));
+  }
+
+  /**
+   * The event types a team's activities can be filed under — the valid
+   * `event_type_id` values for {@link createActivity}.
+   */
+  async listEventTypes(teamId?: string): Promise<EventType[]> {
+    const team = Number(this.resolveTeam(teamId));
+    const data = await this.graphql(LIST_EVENT_TYPES, { team });
+    const raw =
+      (data.activities_event_types as Array<{
+        id: number;
+        name?: string;
+        color?: string;
+      }> | null) ?? [];
+    return raw.map((t) => ({
+      id: t.id,
+      name: (t.name ?? "").trim(),
+      color: t.color ?? "",
+    }));
+  }
+
+  /**
+   * Create an activity on the team's calendar. **This writes to production.**
+   *
+   * `CreateActivity` has no team argument — it targets the session's *current*
+   * team — so this switches the current team first via `ChangeCurrentTeam` and
+   * refuses to write unless the server confirms the switch landed on the
+   * requested team. (Side effect: the user's "current team" in the Holdsport
+   * app changes to the target team.)
+   *
+   * The payload is validated client-side ({@link validateNewActivity}) before
+   * any request is sent. Returns the created activity as echoed back by the
+   * server, so callers can show exactly what now exists.
+   */
+  async createActivity(
+    activity: NewActivity,
+    teamId?: string,
+  ): Promise<ActivitySummary> {
+    const team = Number(this.resolveTeam(teamId));
+    validateNewActivity(activity);
+    await this.switchToTeam(team);
+
+    const data = await this.graphql(CREATE_ACTIVITY, {
+      input: activityInput(activity),
+    });
+    const created = (
+      data.CreateActivity as { activity?: RawActivity | null } | null
+    )?.activity;
+    if (!created) {
+      throw new Error(
+        "CreateActivity returned no activity — it may not have been created " +
+          "(check the team's calendar), or your login may lack admin rights.",
+      );
+    }
+    return toActivitySummary(created);
+  }
+
+  /**
+   * An activity's current editable fields (converted to team-local wall clock),
+   * its owning team, and its repeat flag — everything an edit needs up front,
+   * and what the CLI's dry-run diff is rendered from.
+   */
+  async activityForEdit(activityId: string | number): Promise<ActivityForEdit> {
+    const data = await this.graphql(SHOW_ACTIVITY_FOR_EDIT, {
+      id: Number(activityId),
+    });
+    const a = data.activity as RawActivityForEdit | null;
+    if (!a) throw new Error(`activity ${activityId} not found`);
+
+    const start = a.starttime?.iso8601
+      ? toWallClock(a.starttime.iso8601)
+      : undefined;
+    const end = a.endtime?.iso8601 ? toWallClock(a.endtime.iso8601) : undefined;
+    const team = a.teams?.[0];
+
+    // Everything the update mutation assigns but NewActivity doesn't cover,
+    // echoed back so the server's assign-all-inputs update can't null it.
+    const passthrough: Record<string, unknown> = {};
+    const echo = (key: string, value: unknown) => {
+      if (value !== null && value !== undefined) passthrough[key] = value;
+    };
+    echo("activity_type", a.type);
+    echo("reminder2", a.reminder2);
+    echo("reminder5", a.reminder5);
+    echo("hide_unattend", a.hide_unattend);
+    echo("ride", a.ride_enabled);
+    echo("ride_comment", a.ride_comment);
+    echo(
+      "only_player_participation_counts",
+      a.only_player_participation_counts,
+    );
+    echo("has_waiting_list", a.has_waiting_list);
+    echo(
+      "hide_activity_players_registration",
+      a.hide_activity_players_registration,
+    );
+    echo("pickup_place", a.pickup_place);
+    // `points` is deliberately not read or echoed: its resolver 500s on
+    // ordinary activities (nil "Festival/Appvagt" context), and the failed
+    // UPDATE's SET clause showed the mutation leaves the column alone.
+    // (`is_club_activity` is create-only — UpdateActivityInput rejects it.)
+    echo("rating", a.rating);
+    if (a.absolute_registration_deadline?.iso8601) {
+      const d = toWallClock(a.absolute_registration_deadline.iso8601);
+      passthrough.absolute_registration_deadline_date = d.date;
+      passthrough.absolute_registration_deadline_time = d.time;
+    }
+    if (a.registration_start_at?.iso8601) {
+      const d = toWallClock(a.registration_start_at.iso8601);
+      passthrough.registration_start_date = d.date;
+      passthrough.registration_start_time = d.time;
+    }
+
+    return {
+      id: a.id,
+      team: team ? { id: team.id, name: (team.name ?? "").trim() } : null,
+      // A series ROOT reports is_repeated_activity: false (verified live) —
+      // only later occurrences carry it — so any of the three flags means
+      // the activity belongs to a series. (`repeat` is no signal at all:
+      // it is true even on one-offs.)
+      is_repeated:
+        (a.is_repeated_activity ?? false) ||
+        (a.is_root_of_repeated_activities ?? false) ||
+        (a.has_future_repeated_activities ?? false),
+      is_payment: a.is_payment_activity ?? false,
+      passthrough,
+      fields: {
+        name: (a.name ?? "").trim(),
+        date: start?.date ?? "",
+        start_time: start?.time ?? "",
+        end_time: end?.time,
+        end_date: end?.date,
+        // The API hands back "" as well as null for "no meeting time" —
+        // both mean unset, so neither should be echoed on an update.
+        meeting_time: a.pickup_time?.trim() || undefined,
+        event_type_id: a.event_type?.id,
+        place: a.place ?? undefined,
+        comment: a.comment ?? undefined,
+        max_attendees: a.max_attender ?? undefined,
+      },
+    };
+  }
+
+  /**
+   * Edit an activity. **This writes to production.**
+   *
+   * Read-modify-write: the activity's current state is fetched, `changes`
+   * (any subset of {@link NewActivity}) is merged over the editable fields,
+   * the merged result is validated, and the full field set is sent — the
+   * editable fields plus a verbatim echo of every other server-assigned field
+   * ({@link ActivityForEdit.passthrough}). The echo is not optional: the
+   * mutation assigns all of its input fields and NULLs the omitted ones, so a
+   * partial update would wipe reminders, deadlines, and settings. Payment
+   * activities are refused outright — their payment fields can't be read
+   * back, so they can't be echoed safely.
+   *
+   * Editing an activity in a repeating series requires an explicit
+   * `repeatScope` — the same choice the app's save dialog forces: `"this"`
+   * edits only this occurrence, `"future"` edits this and all future
+   * occurrences. The scope maps onto the mutation's
+   * `update_current_and_future` boolean. Without a scope, repeated activities
+   * are refused rather than guessed at; for non-repeated activities the scope
+   * is ignored. Like create, the write targets the *current team*, so this
+   * switches to the activity's own team (from the activity itself, not the
+   * configured default) and verifies before writing.
+   */
+  async updateActivity(
+    activityId: string | number,
+    changes: Partial<NewActivity>,
+    opts: { repeatScope?: "this" | "future" } = {},
+  ): Promise<ActivitySummary> {
+    // Drop undefined values so sparse callers (CLI flags, MCP args) can pass
+    // every key without clobbering fields they didn't mean to change.
+    const given = Object.fromEntries(
+      Object.entries(changes).filter(([, v]) => v !== undefined),
+    ) as Partial<NewActivity>;
+    if (Object.keys(given).length === 0) {
+      throw new Error("nothing to change: pass at least one field to update");
+    }
+
+    const current = await this.activityForEdit(activityId);
+    if (current.is_repeated && !opts.repeatScope) {
+      throw new Error(
+        `refusing to edit: activity ${activityId} is part of a repeating ` +
+          'series — say which occurrences to change: scope "this" (only ' +
+          'this one) or "future" (this and all future ones)',
+      );
+    }
+    if (current.is_payment) {
+      throw new Error(
+        `refusing to edit: activity ${activityId} is a payment activity — ` +
+          "its payment fields can't be safely echoed back, so an update " +
+          "could corrupt them; edit it in the Holdsport app instead",
+      );
+    }
+    if (!current.team) {
+      throw new Error(
+        `refusing to edit: could not determine the owning team of activity ${activityId}`,
+      );
+    }
+
+    const merged: NewActivity = { ...current.fields, ...given };
+    validateNewActivity(merged);
+    await this.switchToTeam(current.team.id);
+
+    // The passthrough fields ride along verbatim: the server assigns every
+    // input field, NULLing the omitted ones (see ActivityForEdit.passthrough).
+    const input: Record<string, unknown> = {
+      id: current.id,
+      ...current.passthrough,
+      ...activityInput(merged),
+    };
+    // Only meaningful on a repeated activity; sent explicitly either way so
+    // "just this one" can never be misread as "the whole series".
+    if (current.is_repeated) {
+      input.update_current_and_future = opts.repeatScope === "future";
+    }
+
+    const data = await this.graphql(UPDATE_ACTIVITY, { input });
+    const updated = (
+      data.UpdateActivity as { activity?: RawActivity | null } | null
+    )?.activity;
+    if (!updated) {
+      throw new Error(
+        "UpdateActivity returned no activity — the edit may not have been " +
+          "applied (check the team's calendar), or your login may lack admin rights.",
+      );
+    }
+    return toActivitySummary(updated);
+  }
+
+  /**
+   * Switch the session's current team and verify the server landed on it —
+   * the write mutations apply to the current team, so a wrong or failed
+   * switch must abort before anything is written.
+   */
+  private async switchToTeam(team: number): Promise<void> {
+    const switched = await this.graphql(CHANGE_CURRENT_TEAM, { team });
+    const current = (
+      switched.ChangeCurrentTeam as { team?: { id?: number } | null } | null
+    )?.team;
+    if (current?.id !== team) {
+      throw new Error(
+        `refusing to write: asked to switch to team ${team}, but the server ` +
+          `reports team ${current?.id ?? "unknown"} as current`,
+      );
+    }
   }
 
   /**
@@ -852,6 +1383,7 @@ export class HoldsportClient {
       time: a.starttime?.iso8601 ?? "",
       end_time: a.endtime?.iso8601 ?? "",
       place: (a.place ?? "").trim(),
+      meeting_time: (a.pickup_time ?? "").trim(),
       comment: (a.comment ?? "").trim(),
       event_type: (a.event_type?.name ?? "").trim(),
       is_cancelled: a.is_cancelled ?? false,

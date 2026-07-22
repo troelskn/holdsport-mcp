@@ -1,16 +1,18 @@
 #!/usr/bin/env bun
 /**
- * holdsport-mcp — a read-only MCP server over the Holdsport API.
+ * holdsport-mcp — an MCP server over the Holdsport API.
  *
- * Exposes the same read commands as the `holdsport` CLI as MCP tools so they can
+ * Exposes the same commands as the `holdsport` CLI as MCP tools so they can
  * be driven from Claude Cowork (or any MCP host). It shares the data + business
  * logic in ../src/client.ts with the CLI; the only thing here is tool wiring.
  *
- * Read-only by design: every tool maps to a specific read, and there is no raw
- * request/path escape hatch — so an agent driving it can never reach an
- * unintended endpoint, let alone modify data. The chat/email tools are GraphQL
- * reads only — `SignIn` mints an auth token but writes no data, and no generic
- * GraphQL tool is exposed — so the read-only guarantee holds there too.
+ * Every tool maps to a specific operation, and there is no raw request/path
+ * escape hatch — so an agent driving it can never reach an unintended
+ * endpoint. All tools are reads except two deliberate writes: `create_activity`
+ * and `update_activity`, both gated on an explicit `confirm: true` so an agent
+ * has to surface the details to its user before writing. The chat/email tools
+ * are GraphQL reads only — `SignIn` mints an auth token but writes no data,
+ * and no generic GraphQL tool is exposed.
  *
  * Credentials are passed on every tool call: each tool takes `username` and
  * `password` (and optional `team_id` / `base_url`) in its arguments, and a fresh
@@ -190,6 +192,155 @@ tool(
     },
   },
   (client, a) => client.getActivity(a.activity_id),
+);
+
+tool(
+  "event_types",
+  {
+    title: "List event types",
+    description:
+      "List a team's activity event types (id, name, color) — the valid `event_type_id` " +
+      "values for create_activity. " +
+      "`username` must be the login username, not the email.",
+    inputSchema: { team_id: teamId },
+  },
+  (client, a) => client.listEventTypes(a.team_id),
+);
+
+tool(
+  "create_activity",
+  {
+    title: "Create activity (WRITE)",
+    description:
+      "Create a new activity on a team's calendar. THIS IS THE ONE TOOL THAT WRITES to " +
+      "Holdsport (production data, visible to the whole team). Show the user the exact " +
+      "details and get their explicit approval first; only then call with `confirm: true`. " +
+      "This tool offers no way to delete an activity afterwards. " +
+      "`username` must be the login username, not the email.",
+    inputSchema: {
+      team_id: teamId,
+      name: z.string().describe("Activity name"),
+      date: z.string().describe("Start date, YYYY-MM-DD"),
+      start_time: z.string().describe("Start time, HH:MM (24-hour, team-local time)"),
+      end_time: z.string().optional().describe("End time, HH:MM"),
+      end_date: z
+        .string()
+        .optional()
+        .describe("End date, YYYY-MM-DD (only for multi-day activities)"),
+      meeting_time: z
+        .string()
+        .optional()
+        .describe("Meeting time (Mødetid), HH:MM"),
+      place: z.string().optional().describe("Location"),
+      comment: z.string().optional().describe("Description shown on the activity"),
+      event_type_id: z
+        .number()
+        .optional()
+        .describe("Event type id (see the event_types tool)"),
+      max_attendees: z.number().optional().describe("Max number of attendees"),
+      confirm: z
+        .boolean()
+        .describe(
+          "Must be true. Set only after the user has explicitly approved creating " +
+            "exactly this activity.",
+        ),
+    },
+  },
+  (client, a) => {
+    if (a.confirm !== true) {
+      throw new Error(
+        "not created: confirm must be true — show the user the activity details " +
+          "and get their approval first",
+      );
+    }
+    return client.createActivity(
+      {
+        name: a.name,
+        date: a.date,
+        start_time: a.start_time,
+        end_time: a.end_time,
+        end_date: a.end_date,
+        meeting_time: a.meeting_time,
+        place: a.place,
+        comment: a.comment,
+        event_type_id: a.event_type_id,
+        max_attendees: a.max_attendees,
+      },
+      a.team_id,
+    );
+  },
+);
+
+tool(
+  "update_activity",
+  {
+    title: "Edit activity (WRITE)",
+    description:
+      "Edit an existing activity. THIS WRITES to Holdsport (production data, visible to " +
+      "the whole team). Pass only the fields to change — everything else keeps its value. " +
+      "Read the activity first (the `activity` tool), show the user exactly what will " +
+      "change, and get their explicit approval; only then call with `confirm: true`. " +
+      "For an activity in a repeating series, only that occurrence is changed — this " +
+      "tool never touches the rest of the series (use the Holdsport app for that). " +
+      "`username` must be the login username, not the email.",
+    inputSchema: {
+      activity_id: z.string().describe("Activity id"),
+      name: z.string().optional().describe("New activity name"),
+      date: z.string().optional().describe("New start date, YYYY-MM-DD"),
+      start_time: z
+        .string()
+        .optional()
+        .describe("New start time, HH:MM (24-hour, team-local time)"),
+      end_time: z.string().optional().describe("New end time, HH:MM"),
+      end_date: z
+        .string()
+        .optional()
+        .describe("New end date, YYYY-MM-DD (only for multi-day activities)"),
+      meeting_time: z
+        .string()
+        .optional()
+        .describe("New meeting time (Mødetid), HH:MM"),
+      place: z.string().optional().describe("New location"),
+      comment: z.string().optional().describe("New description shown on the activity"),
+      event_type_id: z
+        .number()
+        .optional()
+        .describe("New event type id (see the event_types tool)"),
+      max_attendees: z.number().optional().describe("New max number of attendees"),
+      confirm: z
+        .boolean()
+        .describe(
+          "Must be true. Set only after the user has explicitly approved exactly " +
+            "these changes.",
+        ),
+    },
+  },
+  (client, a) => {
+    if (a.confirm !== true) {
+      throw new Error(
+        "not updated: confirm must be true — show the user what will change " +
+          "and get their approval first",
+      );
+    }
+    return client.updateActivity(
+      a.activity_id,
+      {
+        name: a.name,
+        date: a.date,
+        start_time: a.start_time,
+        end_time: a.end_time,
+        end_date: a.end_date,
+        meeting_time: a.meeting_time,
+        place: a.place,
+        comment: a.comment,
+        event_type_id: a.event_type_id,
+        max_attendees: a.max_attendees,
+      },
+      // Hardcoded to this one occurrence: an agent can never edit a whole
+      // series through this tool, whatever it passes.
+      { repeatScope: "this" },
+    );
+  },
 );
 
 tool(

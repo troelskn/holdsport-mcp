@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 
 import {
-  clearChatTokenCache,
   type Config,
+  clearChatTokenCache,
   HoldsportClient,
   loadConfig,
 } from "../src/client.ts";
@@ -14,7 +14,9 @@ const baseConfig: Config = {
 };
 
 /** Replace global fetch with a canned-response handler for the duration of a test. */
-function stubFetch(handler: (url: string, init: RequestInit) => Response): void {
+function stubFetch(
+  handler: (url: string, init: RequestInit) => Response,
+): void {
   globalThis.fetch = mock(async (url: unknown, init?: RequestInit) =>
     handler(String(url), init ?? {}),
   ) as unknown as typeof fetch;
@@ -154,7 +156,11 @@ describe("HoldsportClient.roster", () => {
 
   it("shapes rows, drops the 'false' sentinel, dedups, and sorts by role then name", async () => {
     const rows = await new HoldsportClient(baseConfig).roster();
-    expect(rows.map((r) => r.name)).toEqual(["Bo Berg", "Cy Cohen", "Ann Adler"]);
+    expect(rows.map((r) => r.name)).toEqual([
+      "Bo Berg",
+      "Cy Cohen",
+      "Ann Adler",
+    ]);
     expect(rows[0]).toEqual({
       name: "Bo Berg",
       role: "player",
@@ -253,6 +259,15 @@ function stubGraphql(
     email?: unknown;
     activityGroups?: unknown;
     activity?: unknown;
+    eventTypes?: unknown;
+    /** Team echoed by ChangeCurrentTeam; defaults to the requested team. */
+    currentTeam?: unknown;
+    /** Activity echoed by CreateActivity; defaults to none (creation failed). */
+    created?: unknown;
+    /** Activity returned by the for-edit read; defaults to none (not found). */
+    editActivity?: unknown;
+    /** Activity echoed by UpdateActivity; defaults to none (update failed). */
+    updated?: unknown;
   } = {},
 ): {
   signIns: () => number;
@@ -291,6 +306,31 @@ function stubGraphql(
     }
     if (body.query.includes("email(id:")) {
       return json({ data: { email: opts.email ?? null } });
+    }
+    if (body.query.includes("activities_event_types")) {
+      return json({ data: { activities_event_types: opts.eventTypes ?? [] } });
+    }
+    if (body.query.includes("ChangeCurrentTeam")) {
+      const team = opts.currentTeam ?? {
+        id: body.variables.team,
+        name: "Team",
+      };
+      return json({ data: { ChangeCurrentTeam: { team } } });
+    }
+    if (body.query.includes("CreateActivity")) {
+      return json({
+        data: { CreateActivity: { activity: opts.created ?? null } },
+      });
+    }
+    if (body.query.includes("UpdateActivity")) {
+      return json({
+        data: { UpdateActivity: { activity: opts.updated ?? null } },
+      });
+    }
+    // The for-edit read also matches "activity(id:" — dispatch on its
+    // distinctive field first.
+    if (body.query.includes("is_repeated_activity")) {
+      return json({ data: { activity: opts.editActivity ?? null } });
     }
     if (body.query.includes("activities_page")) {
       return json({
@@ -367,7 +407,14 @@ describe("HoldsportClient chat (GraphQL)", () => {
               },
             },
             // Same id as the ad-hoc room 10 — must be dropped as a duplicate.
-            { id: 10, name: "dup", scope: "team", unread_count: 0, activity: null, latest_chat_message: null },
+            {
+              id: 10,
+              name: "dup",
+              scope: "team",
+              unread_count: 0,
+              activity: null,
+              latest_chat_message: null,
+            },
           ],
         },
       ],
@@ -380,12 +427,22 @@ describe("HoldsportClient chat (GraphQL)", () => {
   it("sends the SignIn token as a raw Authorization header on the query", async () => {
     const spy = stubGraphql();
     await new HoldsportClient(chatConfig).listChatRooms();
-    const query = spy.requests().find((r) => r.query.includes("rooms_users_chat_rooms"));
+    const query = spy
+      .requests()
+      .find((r) => r.query.includes("rooms_users_chat_rooms"));
     expect(query?.auth).toBe("tok-123"); // raw token, no "Bearer " prefix
   });
 
   it("memoizes the token across calls (one SignIn for two reads)", async () => {
-    const spy = stubGraphql({ room: { id: 10, name: "r", scope: "team", unread_count: 0, chat_messages: [] } });
+    const spy = stubGraphql({
+      room: {
+        id: 10,
+        name: "r",
+        scope: "team",
+        unread_count: 0,
+        chat_messages: [],
+      },
+    });
     const client = new HoldsportClient(chatConfig);
     await client.listChatRooms();
     await client.chatRoom(10);
@@ -395,9 +452,18 @@ describe("HoldsportClient chat (GraphQL)", () => {
   it("caches across client instances but keys by username", async () => {
     const spy = stubGraphql();
     // Two distinct logins each sign in; reusing a login hits the shared cache.
-    await new HoldsportClient({ ...chatConfig, username: "alice" }).listChatRooms();
-    await new HoldsportClient({ ...chatConfig, username: "bob" }).listChatRooms();
-    await new HoldsportClient({ ...chatConfig, username: "alice" }).listChatRooms();
+    await new HoldsportClient({
+      ...chatConfig,
+      username: "alice",
+    }).listChatRooms();
+    await new HoldsportClient({
+      ...chatConfig,
+      username: "bob",
+    }).listChatRooms();
+    await new HoldsportClient({
+      ...chatConfig,
+      username: "alice",
+    }).listChatRooms();
     expect(spy.signIns()).toBe(2); // alice + bob; the second alice is a cache hit
   });
 
@@ -425,7 +491,13 @@ describe("HoldsportClient chat (GraphQL)", () => {
 
   it("trims to the most recent N but keeps chronological order", async () => {
     stubGraphql({
-      room: { id: 10, name: "r", scope: "team", unread_count: 0, chat_messages: CHAT_MESSAGES },
+      room: {
+        id: 10,
+        name: "r",
+        scope: "team",
+        unread_count: 0,
+        chat_messages: CHAT_MESSAGES,
+      },
     });
     const room = await new HoldsportClient(chatConfig).chatRoom("10", 2);
     expect(room.messages.map((m) => m.id)).toEqual([2, 3]); // newest two, in order
@@ -433,16 +505,16 @@ describe("HoldsportClient chat (GraphQL)", () => {
 
   it("throws a clear error on the empty-{} gate response", async () => {
     stubFetch(() => json({}));
-    await expect(new HoldsportClient(chatConfig).listChatRooms()).rejects.toThrow(
-      /no data|X-App-Version/,
-    );
+    await expect(
+      new HoldsportClient(chatConfig).listChatRooms(),
+    ).rejects.toThrow(/no data|X-App-Version/);
   });
 
   it("surfaces GraphQL errors", async () => {
     stubFetch(() => json({ errors: [{ message: "nope" }] }));
-    await expect(new HoldsportClient(chatConfig).listChatRooms()).rejects.toThrow(
-      /GraphQL error: nope/,
-    );
+    await expect(
+      new HoldsportClient(chatConfig).listChatRooms(),
+    ).rejects.toThrow(/GraphQL error: nope/);
   });
 
   it("throws when SignIn returns no token", async () => {
@@ -451,9 +523,9 @@ describe("HoldsportClient chat (GraphQL)", () => {
       if (body.query.includes("SignIn")) return json({ data: { SignIn: {} } });
       return json({ data: {} });
     });
-    await expect(new HoldsportClient(chatConfig).listChatRooms()).rejects.toThrow(
-      /no access_token/,
-    );
+    await expect(
+      new HoldsportClient(chatConfig).listChatRooms(),
+    ).rejects.toThrow(/no access_token/);
   });
 });
 
@@ -504,14 +576,20 @@ describe("HoldsportClient email (GraphQL)", () => {
 
   it("reads the sent box when sent:true", async () => {
     const spy = stubGraphql({ sent: [INBOX[0]] });
-    const emails = await new HoldsportClient(chatConfig).listEmails({ sent: true });
+    const emails = await new HoldsportClient(chatConfig).listEmails({
+      sent: true,
+    });
     expect(emails).toHaveLength(1);
-    expect(spy.requests().some((r) => r.query.includes("sent_emails"))).toBe(true);
+    expect(spy.requests().some((r) => r.query.includes("sent_emails"))).toBe(
+      true,
+    );
   });
 
   it("limits to the most recent N", async () => {
     stubGraphql({ received: INBOX });
-    const emails = await new HoldsportClient(chatConfig).listEmails({ limit: 1 });
+    const emails = await new HoldsportClient(chatConfig).listEmails({
+      limit: 1,
+    });
     expect(emails.map((e) => e.id)).toEqual([12]);
   });
 
@@ -524,7 +602,10 @@ describe("HoldsportClient email (GraphQL)", () => {
         has_been_read: false,
         created_at: { iso8601: "2025-01-12T08:00:00+01:00" },
         sender: { id: 6, name: "Admin Ann" },
-        recipients: [{ id: 1, name: "Bo Berg" }, { id: 2, name: "Cy Cohen" }],
+        recipients: [
+          { id: 1, name: "Bo Berg" },
+          { id: 2, name: "Cy Cohen" },
+        ],
         attachment1_name: "agenda.pdf",
         attachment1_url: "https://files/agenda.pdf",
         attachment2_name: null,
@@ -583,6 +664,7 @@ describe("HoldsportClient activities (GraphQL)", () => {
               id: 1,
               name: "Træning ",
               place: "Hallen",
+              pickup_time: "15:45",
               is_cancelled: false,
               starttime: { iso8601: "2026-06-04T16:10:00+02:00" },
               endtime: { iso8601: "2026-06-04T17:40:00+02:00" },
@@ -604,11 +686,13 @@ describe("HoldsportClient activities (GraphQL)", () => {
       time: "2026-06-04T16:10:00+02:00",
       end_time: "2026-06-04T17:40:00+02:00",
       place: "Hallen",
+      meeting_time: "15:45",
       event_type: "Træning",
       is_cancelled: false,
       attendee_count: 22,
     });
     expect(rows[1].is_cancelled).toBe(true);
+    expect(rows[1].meeting_time).toBe(""); // no pickup_time in the fixture
     // the paginated activities query was issued, reading the date-filtered
     // `activities_groups` (not the now-cutoff `future_activities_groups`)
     const req = spy.requests().find((r) => r.query.includes("activities_page"));
@@ -652,7 +736,12 @@ describe("HoldsportClient activities (GraphQL)", () => {
       },
     });
     const a = await new HoldsportClient(chatConfig).getActivity("7");
-    expect(a.counts).toEqual({ attending: 3, players: 2, coaches: 1, max: 999 });
+    expect(a.counts).toEqual({
+      attending: 3,
+      players: 2,
+      coaches: 1,
+      max: 999,
+    });
     expect(a.attendance.attending_players).toEqual(["Bo Berg #6", "Cy Cohen"]);
     expect(a.attendance.attending_coaches).toEqual(["Coach Ann"]);
     expect(a.attendance.not_attending).toEqual(["Dee Day"]);
@@ -667,5 +756,521 @@ describe("HoldsportClient activities (GraphQL)", () => {
     await expect(
       new HoldsportClient(chatConfig).getActivity(404),
     ).rejects.toThrow(/activity 404 not found/);
+  });
+
+  it("lists a team's event types, passing the team id as a number", async () => {
+    const spy = stubGraphql({
+      eventTypes: [
+        { id: 3, name: "Træning ", color: "#00ff00" },
+        { id: 4, name: "Kamp", color: "#ff0000" },
+      ],
+    });
+    const types = await new HoldsportClient(chatConfig).listEventTypes();
+    expect(types).toEqual([
+      { id: 3, name: "Træning", color: "#00ff00" },
+      { id: 4, name: "Kamp", color: "#ff0000" },
+    ]);
+    const req = spy
+      .requests()
+      .find((r) => r.query.includes("activities_event_types"));
+    expect(req?.variables.team).toBe(99); // config teamId "99", as an Int
+  });
+});
+
+// --- Creating activities (GraphQL, the one write path) ---------------------
+
+const CREATED_ACTIVITY = {
+  id: 900,
+  name: "Ekstra træning ",
+  place: "Hallen",
+  pickup_time: "16:40",
+  is_cancelled: false,
+  starttime: { iso8601: "2026-08-10T17:00:00+02:00" },
+  endtime: { iso8601: "2026-08-10T18:30:00+02:00" },
+  event_type: { name: "Træning" },
+  attendee_count: 0,
+};
+
+const NEW_ACTIVITY = {
+  name: "Ekstra træning",
+  date: "2026-08-10",
+  start_time: "17:00",
+  end_time: "18:30",
+  meeting_time: "16:40",
+  place: "Hallen",
+  comment: "Medbring bold",
+  event_type_id: 3,
+  max_attendees: 20,
+};
+
+describe("HoldsportClient.createActivity", () => {
+  let originalFetch: typeof fetch;
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    clearChatTokenCache();
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    clearChatTokenCache();
+  });
+
+  it("switches to the team, verifies it, then creates with the mapped input", async () => {
+    const spy = stubGraphql({ created: CREATED_ACTIVITY });
+    const created = await new HoldsportClient(chatConfig).createActivity(
+      NEW_ACTIVITY,
+    );
+
+    // The switch targets the configured team and precedes the create.
+    const ops = spy.requests().map((r) => r.query);
+    const switchAt = ops.findIndex((q) => q.includes("ChangeCurrentTeam"));
+    const createAt = ops.findIndex((q) => q.includes("CreateActivity"));
+    expect(switchAt).toBeGreaterThanOrEqual(0);
+    expect(createAt).toBeGreaterThan(switchAt);
+    expect(spy.requests()[switchAt].variables.team).toBe(99);
+
+    // The CLI fields map onto the mutation's input names.
+    expect(spy.requests()[createAt].variables.input).toEqual({
+      name: "Ekstra træning",
+      // Date + time combined: the resolvers parse start_time/end_time as full
+      // datetimes and ignore the separate date input fields.
+      start_time: "2026-08-10 17:00",
+      end_time: "2026-08-10 18:30",
+      pickup_time: "16:40",
+      place: "Hallen",
+      comment: "Medbring bold",
+      event_type_id: 3,
+      max_number_of_attendees: 20,
+    });
+
+    // The server's echo comes back shaped like a list row.
+    expect(created).toEqual({
+      id: 900,
+      name: "Ekstra træning",
+      time: "2026-08-10T17:00:00+02:00",
+      end_time: "2026-08-10T18:30:00+02:00",
+      place: "Hallen",
+      meeting_time: "16:40",
+      event_type: "Træning",
+      is_cancelled: false,
+      attendee_count: 0,
+    });
+  });
+
+  it("omits optional fields it wasn't given", async () => {
+    const spy = stubGraphql({ created: CREATED_ACTIVITY });
+    await new HoldsportClient(chatConfig).createActivity({
+      name: "Kort",
+      date: "2026-08-10",
+      start_time: "17:00",
+    });
+    const req = spy.requests().find((r) => r.query.includes("CreateActivity"));
+    expect(req?.variables.input).toEqual({
+      name: "Kort",
+      start_time: "2026-08-10 17:00",
+    });
+  });
+
+  it("puts a multi-day end date into the combined end datetime", async () => {
+    const spy = stubGraphql({ created: CREATED_ACTIVITY });
+    await new HoldsportClient(chatConfig).createActivity({
+      name: "Tur",
+      date: "2026-08-10",
+      start_time: "17:00",
+      end_time: "09:00",
+      end_date: "2026-08-11",
+    });
+    const req = spy.requests().find((r) => r.query.includes("CreateActivity"));
+    expect(req?.variables.input.start_time).toBe("2026-08-10 17:00");
+    expect(req?.variables.input.end_time).toBe("2026-08-11 09:00");
+  });
+
+  it("refuses to create when the server lands on a different team", async () => {
+    const spy = stubGraphql({
+      currentTeam: { id: 123, name: "Wrong team" },
+      created: CREATED_ACTIVITY,
+    });
+    await expect(
+      new HoldsportClient(chatConfig).createActivity(NEW_ACTIVITY),
+    ).rejects.toThrow(/refusing to write.*123/);
+    // Nothing was written: the create mutation was never sent.
+    expect(spy.requests().some((r) => r.query.includes("CreateActivity"))).toBe(
+      false,
+    );
+  });
+
+  it("rejects malformed dates/times before any request is sent", async () => {
+    const spy = stubGraphql();
+    const client = new HoldsportClient(chatConfig);
+    await expect(
+      client.createActivity({ ...NEW_ACTIVITY, date: "10/08/2026" }),
+    ).rejects.toThrow(/YYYY-MM-DD/);
+    await expect(
+      client.createActivity({ ...NEW_ACTIVITY, start_time: "5pm" }),
+    ).rejects.toThrow(/HH:MM/);
+    await expect(
+      client.createActivity({ ...NEW_ACTIVITY, meeting_time: "9.05" }),
+    ).rejects.toThrow(/meeting time.*HH:MM/);
+    await expect(
+      client.createActivity({ ...NEW_ACTIVITY, end_time: "16:00" }),
+    ).rejects.toThrow(/not after start/);
+    await expect(
+      client.createActivity({ ...NEW_ACTIVITY, name: "  " }),
+    ).rejects.toThrow(/name/);
+    expect(spy.requests()).toHaveLength(0);
+  });
+
+  it("allows an earlier end time when the activity ends on a later day", async () => {
+    stubGraphql({ created: CREATED_ACTIVITY });
+    await expect(
+      new HoldsportClient(chatConfig).createActivity({
+        ...NEW_ACTIVITY,
+        end_time: "09:00",
+        end_date: "2026-08-11",
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it("throws when CreateActivity echoes no activity back", async () => {
+    stubGraphql({ created: null });
+    await expect(
+      new HoldsportClient(chatConfig).createActivity(NEW_ACTIVITY),
+    ).rejects.toThrow(/returned no activity/);
+  });
+});
+
+// A real-world-shaped for-edit read: the API hands back UTC instants (`Z`),
+// which the editable fields must convert to Danish wall clock.
+const EDIT_ACTIVITY = {
+  id: 55934876,
+  name: "Træning U16",
+  place: "Arenaen",
+  comment: "Fys 9.15",
+  pickup_time: "09:05",
+  starttime: { iso8601: "2026-08-09T08:45:00Z" }, // 10:45 Danish summer time
+  endtime: { iso8601: "2026-08-09T10:15:00Z" }, // 12:15
+  event_type: { id: 2 },
+  max_attender: 999,
+  teams: [{ id: 37141, name: "RSIK U16" }],
+  is_repeated_activity: false,
+  is_root_of_repeated_activities: false,
+  has_future_repeated_activities: false,
+  // Server-assigned fields that must be echoed back on update (values as a
+  // real activity returns them: booleans/ints non-null, unused fields null).
+  is_payment_activity: false,
+  type: 3,
+  reminder2: 0,
+  reminder5: 0,
+  hide_unattend: false,
+  ride_enabled: false,
+  ride_comment: null,
+  only_player_participation_counts: false,
+  has_waiting_list: false,
+  hide_activity_players_registration: false,
+  pickup_place: null,
+  points: null,
+  rating: null,
+  is_club_activity: false,
+  absolute_registration_deadline: null,
+  registration_start_at: null,
+};
+
+/** The passthrough echo expected from EDIT_ACTIVITY (nulls omitted). */
+const EDIT_PASSTHROUGH = {
+  activity_type: 3,
+  reminder2: 0,
+  reminder5: 0,
+  hide_unattend: false,
+  ride: false,
+  only_player_participation_counts: false,
+  has_waiting_list: false,
+  hide_activity_players_registration: false,
+};
+
+describe("HoldsportClient.updateActivity", () => {
+  let originalFetch: typeof fetch;
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    clearChatTokenCache();
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    clearChatTokenCache();
+  });
+
+  it("reads the editable fields back in Danish wall-clock time", async () => {
+    stubGraphql({ editActivity: EDIT_ACTIVITY });
+    const a = await new HoldsportClient(chatConfig).activityForEdit(55934876);
+    expect(a).toEqual({
+      id: 55934876,
+      team: { id: 37141, name: "RSIK U16" },
+      is_repeated: false,
+      is_payment: false,
+      passthrough: EDIT_PASSTHROUGH,
+      fields: {
+        name: "Træning U16",
+        date: "2026-08-09",
+        start_time: "10:45", // 08:45Z shown as Danish summer time
+        end_time: "12:15",
+        end_date: "2026-08-09",
+        meeting_time: "09:05", // pickup_time is already wall clock
+        event_type_id: 2,
+        place: "Arenaen",
+        comment: "Fys 9.15",
+        max_attendees: 999,
+      },
+    });
+  });
+
+  it("converts winter instants with the +01:00 offset", async () => {
+    stubGraphql({
+      editActivity: {
+        ...EDIT_ACTIVITY,
+        starttime: { iso8601: "2026-01-15T17:00:00Z" },
+        endtime: null,
+      },
+    });
+    const a = await new HoldsportClient(chatConfig).activityForEdit(55934876);
+    expect(a.fields.date).toBe("2026-01-15");
+    expect(a.fields.start_time).toBe("18:00");
+    expect(a.fields.end_time).toBeUndefined();
+    expect(a.fields.end_date).toBeUndefined();
+  });
+
+  it("merges changes over the current fields and sends the full set to the activity's own team", async () => {
+    const spy = stubGraphql({
+      editActivity: EDIT_ACTIVITY,
+      updated: CREATED_ACTIVITY,
+    });
+    await new HoldsportClient(chatConfig).updateActivity(55934876, {
+      start_time: "11:00",
+      end_time: "12:30",
+    });
+
+    // Switched to the activity's owning team — not the configured team 99.
+    const switchReq = spy
+      .requests()
+      .find((r) => r.query.includes("ChangeCurrentTeam"));
+    expect(switchReq?.variables.team).toBe(37141);
+
+    // The full merged field set goes out, so paired fields (date + time) that
+    // the server may recombine never arrive half-updated.
+    const req = spy.requests().find((r) => r.query.includes("UpdateActivity"));
+    expect(req?.variables.input).toEqual({
+      id: 55934876,
+      name: "Træning U16",
+      // The update resolver parses start_time/end_time as full datetimes and
+      // ignores the separate date fields, so date + time arrive combined.
+      start_time: "2026-08-09 11:00",
+      end_time: "2026-08-09 12:30",
+      pickup_time: "09:05", // untouched fields ride along unchanged
+      event_type_id: 2,
+      place: "Arenaen",
+      comment: "Fys 9.15",
+      max_number_of_attendees: 999,
+      // The server NULLs any omitted input field, so the non-editable fields
+      // must be echoed back verbatim.
+      ...EDIT_PASSTHROUGH,
+    });
+  });
+
+  it("ignores undefined change values instead of clobbering fields", async () => {
+    const spy = stubGraphql({
+      editActivity: EDIT_ACTIVITY,
+      updated: CREATED_ACTIVITY,
+    });
+    await new HoldsportClient(chatConfig).updateActivity(55934876, {
+      name: "Ny titel",
+      place: undefined,
+    });
+    const req = spy.requests().find((r) => r.query.includes("UpdateActivity"));
+    expect(req?.variables.input.name).toBe("Ny titel");
+    expect(req?.variables.input.place).toBe("Arenaen"); // kept, not cleared
+  });
+
+  it("treats an empty pickup_time as unset and does not echo it back", async () => {
+    // The API returns "" as well as null for "no meeting time".
+    const spy = stubGraphql({
+      editActivity: { ...EDIT_ACTIVITY, pickup_time: "" },
+      updated: CREATED_ACTIVITY,
+    });
+    const a = await new HoldsportClient(chatConfig).activityForEdit(55934876);
+    expect(a.fields.meeting_time).toBeUndefined();
+    await new HoldsportClient(chatConfig).updateActivity(55934876, {
+      name: "Ny",
+    });
+    const req = spy.requests().find((r) => r.query.includes("UpdateActivity"));
+    expect(req?.variables.input).not.toHaveProperty("pickup_time");
+  });
+
+  it("throws when no changes are given, before any request", async () => {
+    const spy = stubGraphql();
+    const client = new HoldsportClient(chatConfig);
+    await expect(client.updateActivity(1, {})).rejects.toThrow(
+      /nothing to change/,
+    );
+    await expect(client.updateActivity(1, { name: undefined })).rejects.toThrow(
+      /nothing to change/,
+    );
+    expect(spy.requests()).toHaveLength(0);
+  });
+
+  it("refuses a repeated activity when no repeat scope is given", async () => {
+    const spy = stubGraphql({
+      editActivity: { ...EDIT_ACTIVITY, is_repeated_activity: true },
+      updated: CREATED_ACTIVITY,
+    });
+    await expect(
+      new HoldsportClient(chatConfig).updateActivity(55934876, { name: "Ny" }),
+    ).rejects.toThrow(/repeating/);
+    expect(spy.requests().some((r) => r.query.includes("UpdateActivity"))).toBe(
+      false,
+    );
+  });
+
+  it("detects a series ROOT as repeated even though is_repeated_activity is false", async () => {
+    // Verified live: the first activity of a series reports
+    // is_repeated_activity: false and only flags is_root_of_repeated_activities.
+    for (const flag of [
+      "is_root_of_repeated_activities",
+      "has_future_repeated_activities",
+    ]) {
+      stubGraphql({
+        editActivity: { ...EDIT_ACTIVITY, [flag]: true },
+        updated: CREATED_ACTIVITY,
+      });
+      await expect(
+        new HoldsportClient(chatConfig).updateActivity(55934876, {
+          name: "Ny",
+        }),
+      ).rejects.toThrow(/repeating/);
+    }
+  });
+
+  it('maps repeat scope "this" / "future" onto update_current_and_future', async () => {
+    for (const [scope, sent] of [
+      ["this", false],
+      ["future", true],
+    ] as const) {
+      const spy = stubGraphql({
+        editActivity: { ...EDIT_ACTIVITY, is_repeated_activity: true },
+        updated: CREATED_ACTIVITY,
+      });
+      await new HoldsportClient(chatConfig).updateActivity(
+        55934876,
+        { name: "Ny" },
+        { repeatScope: scope },
+      );
+      const req = spy
+        .requests()
+        .find((r) => r.query.includes("UpdateActivity"));
+      expect(req?.variables.input.update_current_and_future).toBe(sent);
+    }
+  });
+
+  it("never sends update_current_and_future for a non-repeated activity", async () => {
+    // Even if a caller passes a scope, a one-off activity must not carry the
+    // series flag — the merge test above also guards this via its exact
+    // toEqual on the input.
+    const spy = stubGraphql({
+      editActivity: EDIT_ACTIVITY,
+      updated: CREATED_ACTIVITY,
+    });
+    await new HoldsportClient(chatConfig).updateActivity(
+      55934876,
+      { name: "Ny" },
+      { repeatScope: "future" },
+    );
+    const req = spy.requests().find((r) => r.query.includes("UpdateActivity"));
+    expect(req?.variables.input).not.toHaveProperty(
+      "update_current_and_future",
+    );
+  });
+
+  it("refuses to edit a payment activity", async () => {
+    const spy = stubGraphql({
+      editActivity: { ...EDIT_ACTIVITY, is_payment_activity: true },
+      updated: CREATED_ACTIVITY,
+    });
+    await expect(
+      new HoldsportClient(chatConfig).updateActivity(55934876, { name: "Ny" }),
+    ).rejects.toThrow(/payment activity/);
+    expect(spy.requests().some((r) => r.query.includes("UpdateActivity"))).toBe(
+      false,
+    );
+  });
+
+  it("echoes registration windows as wall-clock date + time pairs", async () => {
+    const spy = stubGraphql({
+      editActivity: {
+        ...EDIT_ACTIVITY,
+        absolute_registration_deadline: { iso8601: "2026-08-08T18:00:00Z" },
+        registration_start_at: { iso8601: "2026-08-01T06:00:00Z" },
+        ride_comment: "Samkørsel fra hallen",
+      },
+      updated: CREATED_ACTIVITY,
+    });
+    await new HoldsportClient(chatConfig).updateActivity(55934876, {
+      name: "Ny",
+    });
+    const input = spy.requests().find((r) => r.query.includes("UpdateActivity"))
+      ?.variables.input;
+    expect(input.absolute_registration_deadline_date).toBe("2026-08-08");
+    expect(input.absolute_registration_deadline_time).toBe("20:00"); // 18:00Z, Danish summer
+    expect(input.registration_start_date).toBe("2026-08-01");
+    expect(input.registration_start_time).toBe("08:00");
+    expect(input.ride_comment).toBe("Samkørsel fra hallen");
+  });
+
+  it("refuses when the owning team is unknown", async () => {
+    stubGraphql({ editActivity: { ...EDIT_ACTIVITY, teams: [] } });
+    await expect(
+      new HoldsportClient(chatConfig).updateActivity(55934876, { name: "Ny" }),
+    ).rejects.toThrow(/owning team/);
+  });
+
+  it("validates the merged result before writing", async () => {
+    const spy = stubGraphql({ editActivity: EDIT_ACTIVITY });
+    // 09:00 is before the activity's (unchanged) 10:45 start.
+    await expect(
+      new HoldsportClient(chatConfig).updateActivity(55934876, {
+        end_time: "09:00",
+      }),
+    ).rejects.toThrow(/not after start/);
+    const wrote = spy
+      .requests()
+      .some(
+        (r) =>
+          r.query.includes("UpdateActivity") ||
+          r.query.includes("ChangeCurrentTeam"),
+      );
+    expect(wrote).toBe(false);
+  });
+
+  it("refuses when the server lands on a different team", async () => {
+    const spy = stubGraphql({
+      editActivity: EDIT_ACTIVITY,
+      currentTeam: { id: 1, name: "Wrong" },
+      updated: CREATED_ACTIVITY,
+    });
+    await expect(
+      new HoldsportClient(chatConfig).updateActivity(55934876, { name: "Ny" }),
+    ).rejects.toThrow(/refusing to write/);
+    expect(spy.requests().some((r) => r.query.includes("UpdateActivity"))).toBe(
+      false,
+    );
+  });
+
+  it("throws when the activity is not found", async () => {
+    stubGraphql({ editActivity: null });
+    await expect(
+      new HoldsportClient(chatConfig).updateActivity(404, { name: "Ny" }),
+    ).rejects.toThrow(/activity 404 not found/);
+  });
+
+  it("throws when UpdateActivity echoes no activity back", async () => {
+    stubGraphql({ editActivity: EDIT_ACTIVITY, updated: null });
+    await expect(
+      new HoldsportClient(chatConfig).updateActivity(55934876, { name: "Ny" }),
+    ).rejects.toThrow(/returned no activity/);
   });
 });

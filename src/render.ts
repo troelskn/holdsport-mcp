@@ -13,6 +13,7 @@ import type {
   ChatRoomSummary,
   EmailDetail,
   EmailSummary,
+  NewActivity,
   RosterEntry,
 } from "./client.ts";
 
@@ -22,7 +23,10 @@ export function table(headers: string[], rows: string[][]): string {
     Math.max(h.length, ...rows.map((r) => (r[i] ?? "").length)),
   );
   const fmt = (cells: string[]) =>
-    cells.map((c, i) => (c ?? "").padEnd(widths[i])).join("  ").trimEnd();
+    cells
+      .map((c, i) => (c ?? "").padEnd(widths[i]))
+      .join("  ")
+      .trimEnd();
   return [
     fmt(headers),
     widths.map((w) => "─".repeat(w)).join("  "),
@@ -52,7 +56,8 @@ const displayParts = new Intl.DateTimeFormat("en-GB", {
 /** Format an instant as Danish `DD-MM-YYYY HH:MM` in {@link DISPLAY_TZ}. */
 function formatInstant(date: Date): string {
   const p: Record<string, string> = {};
-  for (const { type, value } of displayParts.formatToParts(date)) p[type] = value;
+  for (const { type, value } of displayParts.formatToParts(date))
+    p[type] = value;
   return `${p.day}-${p.month}-${p.year} ${p.hour}:${p.minute}`;
 }
 
@@ -62,7 +67,11 @@ export function cell(value: unknown): string {
   const s = String(value);
   // A timestamp carrying an explicit zone (Z or ±HH:MM) is a real instant: show
   // it in Danish local time.
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/.test(s)) {
+  if (
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/.test(
+      s,
+    )
+  ) {
     const d = new Date(s);
     if (!Number.isNaN(d.getTime())) return formatInstant(d);
   }
@@ -116,7 +125,9 @@ export function renderHuman(
     const keys = opts.fields ?? Object.keys(o).filter((k) => isScalar(o[k]));
     if (keys.length === 0) return "(no fields)";
     const width = Math.max(...keys.map((k) => k.length));
-    return keys.map((k) => `${k.padEnd(width)}  ${clip(cell(o[k]))}`).join("\n");
+    return keys
+      .map((k) => `${k.padEnd(width)}  ${clip(cell(o[k]))}`)
+      .join("\n");
   }
 
   return cell(data);
@@ -236,10 +247,11 @@ export function renderActivities(rows: ActivitySummary[]): string {
   const clip = (s: string, n: number) =>
     s.length > n ? `${s.slice(0, n - 1)}…` : s;
   const body = table(
-    ["Id", "When", "Type", "Place", "#", "Name"],
+    ["Id", "When", "Meet", "Type", "Place", "#", "Name"],
     rows.map((r) => [
       String(r.id),
       cell(r.time),
+      r.meeting_time,
       clip(r.event_type, 16),
       clip(r.place, 18),
       String(r.attendee_count),
@@ -247,6 +259,63 @@ export function renderActivities(rows: ActivitySummary[]): string {
     ]),
   );
   return `${body}\n\n${rows.length} activities`;
+}
+
+/** Preview of an activity about to be created, for the CLI's dry-run/confirm. */
+export function renderNewActivity(a: NewActivity): string {
+  const date =
+    a.end_date && a.end_date !== a.date ? `${a.date} – ${a.end_date}` : a.date;
+  const lines = [
+    `# ${a.name}`,
+    `Date:  ${date}`,
+    `Time:  ${a.start_time}${a.end_time ? ` – ${a.end_time}` : ""}`,
+  ];
+  if (a.meeting_time) lines.push(`Meet:  ${a.meeting_time}`);
+  if (a.place) lines.push(`Place: ${a.place}`);
+  if (a.event_type_id !== undefined)
+    lines.push(`Type:  event type ${a.event_type_id}`);
+  if (a.max_attendees !== undefined)
+    lines.push(`Max:   ${a.max_attendees} attendees`);
+  if (a.comment) lines.push(`Note:  ${a.comment.replace(/\s+/g, " ").trim()}`);
+  return lines.join("\n");
+}
+
+/**
+ * Diff of an activity edit, for the CLI's dry-run/confirm: one `old → new`
+ * line per field that changes, given the current fields and the merged result.
+ */
+export function renderActivityEdit(
+  current: NewActivity,
+  merged: NewActivity,
+): string {
+  const labels: Array<[keyof NewActivity, string]> = [
+    ["name", "Name"],
+    ["date", "Date"],
+    ["start_time", "Start"],
+    ["end_time", "End"],
+    ["end_date", "End date"],
+    ["meeting_time", "Meet"],
+    ["place", "Place"],
+    ["event_type_id", "Event type"],
+    ["max_attendees", "Max"],
+    ["comment", "Note"],
+  ];
+  const lines = [`# ${current.name}`];
+  const width = Math.max(...labels.map(([, l]) => l.length));
+  for (const [key, label] of labels) {
+    const before = current[key];
+    const after = merged[key];
+    if (before === after) continue;
+    const show = (v: unknown) =>
+      v === undefined || v === ""
+        ? "(empty)"
+        : String(v).replace(/\s+/g, " ").trim();
+    lines.push(
+      `${`${label}:`.padEnd(width + 1)}  ${show(before)} → ${show(after)}`,
+    );
+  }
+  if (lines.length === 1) lines.push("(no changes)");
+  return lines.join("\n");
 }
 
 /**
@@ -257,13 +326,15 @@ export function renderActivity(
   a: ActivityDetail,
   opts: { names?: boolean } = {},
 ): string {
-  const when = a.end_time ? `${cell(a.time)} – ${cell(a.end_time)}` : cell(a.time);
+  const when = a.end_time
+    ? `${cell(a.time)} – ${cell(a.end_time)}`
+    : cell(a.time);
   const lines = [
     `# ${a.name || "(unnamed)"}${a.is_cancelled ? "  (CANCELLED)" : ""}`,
     `When:  ${when}`,
-    `Type:  ${a.event_type || "—"}`,
-    `Place: ${a.place || "—"}`,
   ];
+  if (a.meeting_time) lines.push(`Meet:  ${a.meeting_time}`);
+  lines.push(`Type:  ${a.event_type || "—"}`, `Place: ${a.place || "—"}`);
   if (a.comment) lines.push(`Note:  ${a.comment.replace(/\s+/g, " ").trim()}`);
 
   lines.push(

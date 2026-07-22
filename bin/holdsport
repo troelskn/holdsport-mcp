@@ -11,8 +11,9 @@
  * ../src/render.ts. This file is just argument parsing and output glue.
  *
  * API docs: https://github.com/Holdsport/holdsport-api
- * Only documented read endpoints are wrapped below — the CLI is read-only and
- * has no raw-request escape hatch.
+ * Everything is read-only except `activities create` and `activities edit`,
+ * which preview by default and only write with an explicit --yes. There is no
+ * raw-request escape hatch.
  *
  * Run with no arguments (or `--help`) for usage.
  *
@@ -26,16 +27,20 @@
 import {
   HoldsportClient,
   loadConfig,
+  type NewActivity,
   type Query,
+  validateNewActivity,
 } from "../src/client.ts";
 import {
   renderActivities,
   renderActivity,
+  renderActivityEdit,
   renderChatRooms,
   renderChatTranscript,
   renderEmail,
   renderEmails,
   renderHuman,
+  renderNewActivity,
   rosterCsv,
   rosterTable,
 } from "../src/render.ts";
@@ -101,6 +106,29 @@ function teamOf(flags: Query): string | undefined {
   return flags.team !== undefined ? String(flags.team) : undefined;
 }
 
+/**
+ * The activity fields given as flags, as a sparse Partial<NewActivity>.
+ * `activities create` requires name/date/start among them; `activities edit`
+ * takes any subset.
+ */
+function activityFieldFlags(flags: Query): Partial<NewActivity> {
+  const str = (v: string | number | undefined) =>
+    v === undefined ? undefined : String(v);
+  return {
+    name: str(flags.name),
+    date: str(flags.date),
+    start_time: str(flags.start),
+    end_time: str(flags.end),
+    end_date: str(flags["end-date"]),
+    meeting_time: str(flags.meet),
+    place: str(flags.place),
+    comment: str(flags.comment),
+    event_type_id:
+      flags["event-type"] !== undefined ? Number(flags["event-type"]) : undefined,
+    max_attendees: flags.max !== undefined ? Number(flags.max) : undefined,
+  };
+}
+
 // --- Commands --------------------------------------------------------------
 
 const USAGE = `holdsport — CLI for the Holdsport API
@@ -125,6 +153,18 @@ Core commands:
   activities [date|id]        Upcoming activities: type, place, sign-up count
                                 (date YYYY-MM-DD = from that day; flags: --page N)
                                 with an id: that activity + attendance (flags: --names)
+  activities create           Create an activity — WRITES to Holdsport.
+                                Previews and exits by default; add --yes to create.
+                                required: --name <text> --date YYYY-MM-DD --start HH:MM
+                                optional: --end HH:MM, --end-date YYYY-MM-DD, --meet HH:MM,
+                                          --place <text>, --comment <text>,
+                                          --event-type <id>, --max <n>
+  activities edit <id>        Edit an activity — WRITES to Holdsport.
+                                Takes any subset of the create flags; unmentioned fields
+                                keep their values. Previews an old → new diff by default;
+                                add --yes to apply. For a repeating activity only that
+                                occurrence is changed — never the rest of the series.
+  event-types                 List the team's activity event types (ids for --event-type)
   tasks <activity_id>         List an activity's tasks
   user                        Show the current user profile
   profiles                    List managed profiles
@@ -206,8 +246,67 @@ async function main(argv: string[]): Promise<void> {
       });
 
     case "activities": {
-      // A YYYY-MM-DD arg is a list start-date; any other arg is an activity id.
+      // A YYYY-MM-DD arg is a list start-date; "create"/"edit" write; any
+      // other arg is an activity id.
       const arg = positional[0];
+      if (arg === "create") {
+        const fields = activityFieldFlags(flags);
+        for (const [field, flagName] of [
+          ["name", "name"],
+          ["date", "date"],
+          ["start_time", "start"],
+        ] as const) {
+          if (fields[field] === undefined) fail(`missing required flag: --${flagName}`);
+        }
+        const activity = fields as NewActivity;
+        // Validate even the dry run, so a bad payload is caught before --yes.
+        validateNewActivity(activity);
+        if (!flags.yes) {
+          console.log(renderNewActivity(activity));
+          console.log("\nDry run — nothing created. Re-run with --yes to create this activity.");
+          return;
+        }
+        const created = await client.createActivity(activity, teamOf(flags));
+        if (flags.json) return print(created);
+        return console.log(`Created:\n\n${renderActivities([created])}`);
+      }
+      if (arg === "edit") {
+        const id = need(positional, 1, "activity_id");
+        const changes = Object.fromEntries(
+          Object.entries(activityFieldFlags(flags)).filter(([, v]) => v !== undefined),
+        ) as Partial<NewActivity>;
+        if (Object.keys(changes).length === 0) {
+          fail("nothing to change: pass at least one field flag (--name, --date, --start, …)");
+        }
+        if (flags.scope !== undefined) {
+          fail(
+            "--scope is not supported: edits always change only this occurrence — " +
+              "series-wide edits are deliberately left to the Holdsport app",
+          );
+        }
+        if (!flags.yes) {
+          // The dry run reads the activity (a read, no write) to diff against.
+          const current = await client.activityForEdit(id);
+          const merged: NewActivity = { ...current.fields, ...changes };
+          validateNewActivity(merged);
+          console.log(renderActivityEdit(current.fields, merged));
+          if (current.is_repeated) {
+            console.log(
+              "\nThis activity repeats — only this occurrence will be changed; " +
+                "the rest of the series is untouched.",
+            );
+          }
+          console.log("\nDry run — nothing changed. Re-run with --yes to apply.");
+          return;
+        }
+        // Deliberately hardcoded to this one occurrence: series-wide edits stay
+        // in the app, where the save dialog makes the blast radius explicit.
+        const updated = await client.updateActivity(id, changes, {
+          repeatScope: "this",
+        });
+        if (flags.json) return print(updated);
+        return console.log(`Updated:\n\n${renderActivities([updated])}`);
+      }
       if (arg !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(arg)) {
         const detail = await client.getActivity(arg);
         if (flags.json) return print(detail);
@@ -221,6 +320,11 @@ async function main(argv: string[]): Promise<void> {
       if (flags.json) return print(rows);
       return console.log(renderActivities(rows));
     }
+
+    case "event-types":
+      return output(await client.listEventTypes(teamOf(flags)), flags, {
+        fields: ["id", "name", "color"],
+      });
 
     case "tasks": {
       const activityId = need(positional, 0, "activity_id");

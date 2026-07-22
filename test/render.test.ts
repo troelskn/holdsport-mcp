@@ -82,7 +82,13 @@ describe("isScalar", () => {
 
 describe("table", () => {
   it("aligns columns under a header underline", () => {
-    const lines = table(["A", "BB"], [["1", "22"], ["333", "4"]]).split("\n");
+    const lines = table(
+      ["A", "BB"],
+      [
+        ["1", "22"],
+        ["333", "4"],
+      ],
+    ).split("\n");
     expect(lines).toHaveLength(4); // header, underline, 2 rows
     expect(lines[0]).toBe("A    BB");
     expect(lines[1]).toBe("───  ──");
@@ -96,7 +102,10 @@ describe("renderHuman", () => {
 
   it("renders an array of objects as a table with a row count", () => {
     const out = renderHuman(
-      [{ id: 1, name: "Bo" }, { id: 2, name: "Ann" }],
+      [
+        { id: 1, name: "Bo" },
+        { id: 2, name: "Ann" },
+      ],
       { fields: ["id", "name"] },
     );
     expect(out).toContain("Bo");
@@ -216,7 +225,9 @@ describe("renderChatTranscript", () => {
   });
 
   it("notes an empty room", () => {
-    expect(renderChatTranscript({ ...room, messages: [] })).toContain("(no messages)");
+    expect(renderChatTranscript({ ...room, messages: [] })).toContain(
+      "(no messages)",
+    );
   });
 });
 
@@ -286,6 +297,7 @@ describe("renderActivities", () => {
       time: "2026-06-04T16:10:00+02:00",
       end_time: "2026-06-04T17:40:00+02:00",
       place: "Hallen",
+      meeting_time: "15:45",
       event_type: "Træning",
       is_cancelled: false,
       attendee_count: 22,
@@ -296,6 +308,7 @@ describe("renderActivities", () => {
       time: "2026-06-05T18:00:00+02:00",
       end_time: "",
       place: "Away",
+      meeting_time: "",
       event_type: "Kamp",
       is_cancelled: true,
       attendee_count: 12,
@@ -307,6 +320,8 @@ describe("renderActivities", () => {
     expect(out).toContain("Træning");
     expect(out).toContain("Hallen");
     expect(out).toContain("22");
+    expect(out).toContain("Meet"); // meeting-time column
+    expect(out).toContain("15:45");
     expect(out).toContain("✗ Match"); // cancelled marker
     expect(out).toContain("2 activities");
   });
@@ -323,6 +338,7 @@ describe("renderActivity", () => {
     time: "2026-06-04T16:10:00+02:00",
     end_time: "2026-06-04T17:40:00+02:00",
     place: "Rødovre",
+    meeting_time: "15:50",
     comment: "Husk drikkedunk",
     event_type: "Træning",
     is_cancelled: false,
@@ -341,6 +357,7 @@ describe("renderActivity", () => {
     const out = renderActivity(detail);
     expect(out).toContain("# Sommertræning");
     expect(out).toContain("When:  04-06-2026 16:10 – 04-06-2026 17:40");
+    expect(out).toContain("Meet:  15:50");
     expect(out).toContain("Attending:     3  (2 players, 1 coaches)");
     expect(out).toContain("Not attending: 1");
     expect(out).toContain("Waiting list:  2");
