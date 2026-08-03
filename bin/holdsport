@@ -126,6 +126,10 @@ function activityFieldFlags(flags: Query): Partial<NewActivity> {
     event_type_id:
       flags["event-type"] !== undefined ? Number(flags["event-type"]) : undefined,
     max_attendees: flags.max !== undefined ? Number(flags.max) : undefined,
+    // Free text here; validateNewActivity rejects anything but the known names.
+    registration_type: str(flags["registration-type"]) as
+      | NewActivity["registration_type"]
+      | undefined,
   };
 }
 
@@ -158,7 +162,10 @@ Core commands:
                                 required: --name <text> --date YYYY-MM-DD --start HH:MM
                                 optional: --end HH:MM, --end-date YYYY-MM-DD, --meet HH:MM,
                                           --place <text>, --comment <text>,
-                                          --event-type <id>, --max <n>
+                                          --event-type <id>, --max <n>,
+                                          --registration-type <t>  (sign-up mode: normal,
+                                            pick_out, available, everybody_attending,
+                                            pick_out_sub_teams, no_registration)
   activities edit <id>        Edit an activity — WRITES to Holdsport.
                                 Takes any subset of the create flags; unmentioned fields
                                 keep their values. Previews an old → new diff by default;

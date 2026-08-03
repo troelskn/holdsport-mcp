@@ -83,7 +83,9 @@ bun bin/holdsport activities create \
 bun bin/holdsport activities edit 55901234 --start 17:30 --place "Hal 2" --yes
 ```
 
-For `create`, `--name`, `--date` (YYYY-MM-DD), and `--start` (HH:MM, 24-hour, team-local time) are required; `--end`, `--end-date`, `--meet` (meeting time / Mødetid, HH:MM), `--place`, `--comment`, `--event-type <id>`, and `--max <n>` are optional. `edit` takes any subset of the same flags — fields you don't mention keep their current values. Payloads are validated client-side before anything is sent.
+For `create`, `--name`, `--date` (YYYY-MM-DD), and `--start` (HH:MM, 24-hour, team-local time) are required; `--end`, `--end-date`, `--meet` (meeting time / Mødetid, HH:MM), `--place`, `--comment`, `--event-type <id>`, `--max <n>`, and `--registration-type <type>` are optional. `edit` takes any subset of the same flags — fields you don't mention keep their current values. Payloads are validated client-side before anything is sent.
+
+`--registration-type` (MCP: `registration_type`) is the sign-up mode — the app's *Tilmeldingstype* dropdown: `normal` (members sign up themselves; the server's default for new activities), `pick_out` (the coach picks the squad / Udtagelse), `available` (members mark availability), `everybody_attending` (everyone is signed up by default), `pick_out_sub_teams`, or `no_registration` (no sign-up at all). On the wire this is the mutations' `activity_type` int — the name↔code mapping is documented in the GraphQL schema's own description of `Activity.type`. On `edit`, a registration-type code this client doesn't know (a future server value) is preserved verbatim rather than guessed at.
 
 How it works, and what to know before using it:
 

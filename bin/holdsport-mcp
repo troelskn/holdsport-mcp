@@ -26,7 +26,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-import { HoldsportClient } from "../src/client.ts";
+import {
+  HoldsportClient,
+  REGISTRATION_TYPES,
+  type RegistrationType,
+} from "../src/client.ts";
 
 const server = new McpServer({ name: "holdsport", version: "1.0.0" });
 
@@ -42,6 +46,18 @@ const teamId = z
   .string()
   .optional()
   .describe("Team id (required for team-scoped data)");
+
+const registrationType = z
+  .enum(
+    Object.keys(REGISTRATION_TYPES) as [RegistrationType, ...RegistrationType[]],
+  )
+  .optional()
+  .describe(
+    "Sign-up mode (Tilmeldingstype): normal (members sign up themselves; the " +
+      "server's default for new activities), pick_out (coach picks the squad), " +
+      "available (members mark availability), everybody_attending (everyone is " +
+      "signed up by default), pick_out_sub_teams, no_registration (no sign-up)",
+  );
 
 type Auth = {
   username: string;
@@ -238,6 +254,7 @@ tool(
         .optional()
         .describe("Event type id (see the event_types tool)"),
       max_attendees: z.number().optional().describe("Max number of attendees"),
+      registration_type: registrationType,
       confirm: z
         .boolean()
         .describe(
@@ -265,6 +282,7 @@ tool(
         comment: a.comment,
         event_type_id: a.event_type_id,
         max_attendees: a.max_attendees,
+        registration_type: a.registration_type,
       },
       a.team_id,
     );
@@ -307,6 +325,7 @@ tool(
         .optional()
         .describe("New event type id (see the event_types tool)"),
       max_attendees: z.number().optional().describe("New max number of attendees"),
+      registration_type: registrationType,
       confirm: z
         .boolean()
         .describe(
@@ -335,6 +354,7 @@ tool(
         comment: a.comment,
         event_type_id: a.event_type_id,
         max_attendees: a.max_attendees,
+        registration_type: a.registration_type,
       },
       // Hardcoded to this one occurrence: an agent can never edit a whole
       // series through this tool, whatever it passes.

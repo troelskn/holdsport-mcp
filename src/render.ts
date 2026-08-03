@@ -265,19 +265,23 @@ export function renderActivities(rows: ActivitySummary[]): string {
 export function renderNewActivity(a: NewActivity): string {
   const date =
     a.end_date && a.end_date !== a.date ? `${a.date} – ${a.end_date}` : a.date;
-  const lines = [
-    `# ${a.name}`,
-    `Date:  ${date}`,
-    `Time:  ${a.start_time}${a.end_time ? ` – ${a.end_time}` : ""}`,
+  const rows: Array<[string, string]> = [
+    ["Date", date],
+    ["Time", `${a.start_time}${a.end_time ? ` – ${a.end_time}` : ""}`],
   ];
-  if (a.meeting_time) lines.push(`Meet:  ${a.meeting_time}`);
-  if (a.place) lines.push(`Place: ${a.place}`);
+  if (a.meeting_time) rows.push(["Meet", a.meeting_time]);
+  if (a.place) rows.push(["Place", a.place]);
   if (a.event_type_id !== undefined)
-    lines.push(`Type:  event type ${a.event_type_id}`);
+    rows.push(["Type", `event type ${a.event_type_id}`]);
+  if (a.registration_type) rows.push(["Sign-up", a.registration_type]);
   if (a.max_attendees !== undefined)
-    lines.push(`Max:   ${a.max_attendees} attendees`);
-  if (a.comment) lines.push(`Note:  ${a.comment.replace(/\s+/g, " ").trim()}`);
-  return lines.join("\n");
+    rows.push(["Max", `${a.max_attendees} attendees`]);
+  if (a.comment) rows.push(["Note", a.comment.replace(/\s+/g, " ").trim()]);
+  const width = Math.max(...rows.map(([label]) => label.length));
+  return [
+    `# ${a.name}`,
+    ...rows.map(([label, v]) => `${`${label}:`.padEnd(width + 1)}  ${v}`),
+  ].join("\n");
 }
 
 /**
@@ -297,6 +301,7 @@ export function renderActivityEdit(
     ["meeting_time", "Meet"],
     ["place", "Place"],
     ["event_type_id", "Event type"],
+    ["registration_type", "Sign-up"],
     ["max_attendees", "Max"],
     ["comment", "Note"],
   ];

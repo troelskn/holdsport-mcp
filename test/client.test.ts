@@ -870,6 +870,19 @@ describe("HoldsportClient.createActivity", () => {
     });
   });
 
+  it("maps registration_type onto the mutation's activity_type code", async () => {
+    const spy = stubGraphql({ created: CREATED_ACTIVITY });
+    await new HoldsportClient(chatConfig).createActivity({
+      name: "Udtagelseskamp",
+      date: "2026-08-10",
+      start_time: "17:00",
+      registration_type: "pick_out",
+    });
+    const req = spy.requests().find((r) => r.query.includes("CreateActivity"));
+    expect(req?.variables.input.activity_type).toBe(1);
+    expect(req?.variables.input.registration_type).toBeUndefined();
+  });
+
   it("puts a multi-day end date into the combined end datetime", async () => {
     const spy = stubGraphql({ created: CREATED_ACTIVITY });
     await new HoldsportClient(chatConfig).createActivity({
@@ -916,6 +929,12 @@ describe("HoldsportClient.createActivity", () => {
     await expect(
       client.createActivity({ ...NEW_ACTIVITY, name: "  " }),
     ).rejects.toThrow(/name/);
+    await expect(
+      client.createActivity({
+        ...NEW_ACTIVITY,
+        registration_type: "vip" as never,
+      }),
+    ).rejects.toThrow(/registration type must be one of/);
     expect(spy.requests()).toHaveLength(0);
   });
 
@@ -974,9 +993,13 @@ const EDIT_ACTIVITY = {
   registration_start_at: null,
 };
 
-/** The passthrough echo expected from EDIT_ACTIVITY (nulls omitted). */
+/**
+ * The passthrough echo expected from EDIT_ACTIVITY (nulls omitted). Its
+ * `type: 3` is NOT here: a known registration-type code surfaces as the
+ * editable `registration_type` field and reaches the update input through
+ * activityInput instead.
+ */
 const EDIT_PASSTHROUGH = {
-  activity_type: 3,
   reminder2: 0,
   reminder5: 0,
   hide_unattend: false,
@@ -1017,6 +1040,7 @@ describe("HoldsportClient.updateActivity", () => {
         place: "Arenaen",
         comment: "Fys 9.15",
         max_attendees: 999,
+        registration_type: "everybody_attending", // type: 3, mapped to its name
       },
     });
   });
@@ -1067,10 +1091,39 @@ describe("HoldsportClient.updateActivity", () => {
       place: "Arenaen",
       comment: "Fys 9.15",
       max_number_of_attendees: 999,
+      activity_type: 3, // the unchanged registration type still goes out
       // The server NULLs any omitted input field, so the non-editable fields
       // must be echoed back verbatim.
       ...EDIT_PASSTHROUGH,
     });
+  });
+
+  it("changes the registration type when asked", async () => {
+    const spy = stubGraphql({
+      editActivity: EDIT_ACTIVITY,
+      updated: CREATED_ACTIVITY,
+    });
+    await new HoldsportClient(chatConfig).updateActivity(55934876, {
+      registration_type: "pick_out",
+    });
+    const req = spy.requests().find((r) => r.query.includes("UpdateActivity"));
+    expect(req?.variables.input.activity_type).toBe(1); // was 3
+  });
+
+  it("echoes an unknown registration-type code back verbatim", async () => {
+    // A code this client predates must survive an unrelated edit untouched.
+    const spy = stubGraphql({
+      editActivity: { ...EDIT_ACTIVITY, type: 42 },
+      updated: CREATED_ACTIVITY,
+    });
+    const a = await new HoldsportClient(chatConfig).activityForEdit(55934876);
+    expect(a.fields.registration_type).toBeUndefined();
+    expect(a.passthrough.activity_type).toBe(42);
+    await new HoldsportClient(chatConfig).updateActivity(55934876, {
+      name: "Ny",
+    });
+    const req = spy.requests().find((r) => r.query.includes("UpdateActivity"));
+    expect(req?.variables.input.activity_type).toBe(42);
   });
 
   it("ignores undefined change values instead of clobbering fields", async () => {

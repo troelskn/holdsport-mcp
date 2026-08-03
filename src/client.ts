@@ -196,6 +196,38 @@ export interface EventType {
 }
 
 /**
+ * Registration types (Tilmeldingstype) — how sign-up works for an activity —
+ * name → the API's int code. The codes come from the GraphQL schema itself:
+ * the description on `Activity.type` lists them, and the mutations'
+ * `activity_type` input field takes the same codes (it is the NOT NULL column
+ * behind the mandatory echo in {@link ActivityForEdit.passthrough}).
+ */
+export const REGISTRATION_TYPES = {
+  /** Members sign up themselves — the server's default for new activities. */
+  normal: 0,
+  /** The coach picks the squad (Udtagelse). */
+  pick_out: 1,
+  /** Members mark themselves available; the coach confirms. */
+  available: 2,
+  /** Everybody is signed up by default and opts out instead. */
+  everybody_attending: 3,
+  pick_out_sub_teams: 4,
+  /** No sign-up at all. */
+  no_registration: 5,
+} as const;
+
+export type RegistrationType = keyof typeof REGISTRATION_TYPES;
+
+/** The name for an API registration-type code; undefined for unknown codes. */
+export function registrationTypeName(
+  code: number,
+): RegistrationType | undefined {
+  return (Object.keys(REGISTRATION_TYPES) as RegistrationType[]).find(
+    (name) => REGISTRATION_TYPES[name] === code,
+  );
+}
+
+/**
  * Fields for a new activity. Dates are `YYYY-MM-DD`; times are `HH:MM`
  * (24-hour), interpreted by the server in the team's local timezone.
  */
@@ -215,6 +247,8 @@ export interface NewActivity {
   place?: string;
   comment?: string;
   max_attendees?: number;
+  /** Sign-up mode (Tilmeldingstype); see {@link REGISTRATION_TYPES}. */
+  registration_type?: RegistrationType;
 }
 
 /**
@@ -295,6 +329,18 @@ export function validateNewActivity(a: NewActivity): void {
   if (a.meeting_time !== undefined && !time.test(a.meeting_time)) {
     throw new Error(
       `meeting time must be HH:MM (24-hour), got "${a.meeting_time}"`,
+    );
+  }
+  // The CLI and MCP server pass this through from user input, so the union
+  // type is no guarantee.
+  if (
+    a.registration_type !== undefined &&
+    !(a.registration_type in REGISTRATION_TYPES)
+  ) {
+    throw new Error(
+      `registration type must be one of ${Object.keys(REGISTRATION_TYPES).join(
+        ", ",
+      )}; got "${a.registration_type}"`,
     );
   }
   // HH:MM compares correctly as a string; only guard same-day activities.
@@ -668,6 +714,9 @@ function activityInput(activity: NewActivity): Record<string, unknown> {
   if (activity.comment !== undefined) input.comment = activity.comment;
   if (activity.max_attendees !== undefined) {
     input.max_number_of_attendees = activity.max_attendees;
+  }
+  if (activity.registration_type !== undefined) {
+    input.activity_type = REGISTRATION_TYPES[activity.registration_type];
   }
   return input;
 }
@@ -1197,7 +1246,14 @@ export class HoldsportClient {
     const echo = (key: string, value: unknown) => {
       if (value !== null && value !== undefined) passthrough[key] = value;
     };
-    echo("activity_type", a.type);
+    // The registration type is editable (NewActivity.registration_type), so a
+    // known code surfaces in `fields` and rides out via activityInput; only an
+    // unknown code (a server value this client predates) is echoed verbatim.
+    const regType =
+      a.type !== null && a.type !== undefined
+        ? registrationTypeName(a.type)
+        : undefined;
+    if (regType === undefined) echo("activity_type", a.type);
     echo("reminder2", a.reminder2);
     echo("reminder5", a.reminder5);
     echo("hide_unattend", a.hide_unattend);
@@ -1255,6 +1311,7 @@ export class HoldsportClient {
         place: a.place ?? undefined,
         comment: a.comment ?? undefined,
         max_attendees: a.max_attender ?? undefined,
+        registration_type: regType,
       },
     };
   }
