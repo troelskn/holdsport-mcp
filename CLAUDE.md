@@ -39,14 +39,16 @@ Everything is a read except `createActivity` / `updateActivity`. Deliberate safe
 
 - No raw request/path/GraphQL escape hatch in the CLI or MCP tools.
 - Writes are gated: CLI `--yes` (dry-run/diff by default), MCP `confirm: true`.
-- No delete is exposed anywhere (the API's `CancelActivity` can delete; it is intentionally unwrapped).
+- No delete is exposed anywhere. The API *can* delete — `CancelActivity` with `mark_as_canceled: false` removes an activity outright (verified live) — but no command or tool wraps it, deliberately.
 
 ### Write-path invariants (verified against production — don't "simplify" them away)
 
-- The create/update mutations take **no team argument**; they hit the login's *current team*. The client therefore runs `ChangeCurrentTeam` first and refuses to write unless the server confirms the switch landed on the intended team.
-- `updateActivity` is **read-modify-write with a full echo**: the server NULLs every input field omitted from `UpdateActivityInput`, so the client fetches current state, merges changes, and sends everything back. A partial send silently wipes settings. Payment activities are refused because their fields can't be read back.
+- The create/update mutations take **no team argument**; they hit the login's *current team*. The client therefore runs `ChangeCurrentTeam` first and refuses to write unless the server confirms the switch landed on the intended team — for create that's the configured/`--team` team, for update the activity's *own* team, read from the activity itself. Visible side effect: the login's current team in the Holdsport app switches too.
+- `updateActivity` is **read-modify-write with a full echo**: the server NULLs every input field omitted from `UpdateActivityInput`, so the client fetches current state, merges changes, and sends everything back. A partial send silently wipes settings (verified: an update omitting `activity_type` dies on that column's NOT NULL constraint). Payment activities are refused because their fields can't be read back.
+- The CLI/MCP `registration_type` names map to the mutations' `activity_type` int; the name↔code mapping is documented in the GraphQL schema's own description of `Activity.type`. On update, a code this client doesn't know (a future server value) is echoed verbatim, never guessed.
 - Times on the wire are full `YYYY-MM-DD HH:MM` datetimes in `start_time`/`end_time` (the separate date fields are ignored by the server; a bare `HH:MM` lands on today). All wall-clock conversion uses `Europe/Copenhagen` (`TEAM_TZ` in client.ts).
-- Edits to repeating-series activities always send `update_current_and_future: false` — single occurrence only, hardcoded in both front-ends.
+- Edits to repeating-series activities always send `update_current_and_future: false` — single occurrence only, hardcoded in both front-ends (`updateActivity` accepts a `repeatScope` option, but no front-end exposes `"future"`); one-off activities never carry the flag.
+- Activity `meeting_time` (Mødetid) maps to the API's `pickup_time` field.
 
 ## Tests
 
