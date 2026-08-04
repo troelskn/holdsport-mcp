@@ -723,6 +723,7 @@ describe("HoldsportClient activities (GraphQL)", () => {
         starttime: { iso8601: "2026-06-04T16:10:00+02:00" },
         endtime: { iso8601: "2026-06-04T17:40:00+02:00" },
         event_type: { name: "Træning" },
+        type: 1,
         attendee_count: 3,
         player_count: 2,
         coach_count: 1,
@@ -749,6 +750,13 @@ describe("HoldsportClient activities (GraphQL)", () => {
     expect(a.waiting_list).toBe(2);
     expect(a.tasks).toBe(1);
     expect(a.comment).toBe("Husk drikkedunk");
+    expect(a.registration_type).toBe("pick_out");
+  });
+
+  it("surfaces an unknown registration-type code as the bare number", async () => {
+    stubGraphql({ activity: { id: 7, type: 42 } });
+    const a = await new HoldsportClient(chatConfig).getActivity("7");
+    expect(a.registration_type).toBe("42");
   });
 
   it("throws when the activity is not found", async () => {

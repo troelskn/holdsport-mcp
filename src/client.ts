@@ -366,6 +366,11 @@ export interface ActivityDetail {
   meeting_time: string;
   comment: string;
   event_type: string;
+  /**
+   * Sign-up mode (Tilmeldingstype) name; see {@link REGISTRATION_TYPES}. A
+   * code this client doesn't know surfaces as the bare number, e.g. `"7"`.
+   */
+  registration_type: string;
   is_cancelled: boolean;
   counts: { attending: number; players: number; coaches: number; max: number };
   /** Names in each attendance bucket. */
@@ -534,6 +539,7 @@ const LIST_ACTIVITIES = `query ListActivities($team: String, $start: String, $pa
 const SHOW_ACTIVITY = `query ShowActivity($id: Int!) {
   activity(id: $id) {${ACTIVITY_FIELDS}
     comment
+    type
     player_count
     coach_count
     max_attender
@@ -724,6 +730,7 @@ function activityInput(activity: NewActivity): Record<string, unknown> {
 /** Raw GraphQL shape of the rich activity detail, before shaping. */
 interface RawActivityDetail extends RawActivity {
   comment?: string;
+  type?: number | null;
   player_count?: number;
   coach_count?: number;
   max_attender?: number;
@@ -1443,6 +1450,10 @@ export class HoldsportClient {
       meeting_time: (a.pickup_time ?? "").trim(),
       comment: (a.comment ?? "").trim(),
       event_type: (a.event_type?.name ?? "").trim(),
+      registration_type:
+        a.type !== null && a.type !== undefined
+          ? (registrationTypeName(a.type) ?? String(a.type))
+          : "",
       is_cancelled: a.is_cancelled ?? false,
       counts: {
         attending: a.attendee_count ?? 0,

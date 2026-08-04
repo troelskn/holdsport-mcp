@@ -341,6 +341,7 @@ describe("renderActivity", () => {
     meeting_time: "15:50",
     comment: "Husk drikkedunk",
     event_type: "Træning",
+    registration_type: "pick_out",
     is_cancelled: false,
     counts: { attending: 3, players: 2, coaches: 1, max: 999 },
     attendance: {
@@ -356,8 +357,9 @@ describe("renderActivity", () => {
   it("renders header and tally without names by default", () => {
     const out = renderActivity(detail);
     expect(out).toContain("# Sommertræning");
-    expect(out).toContain("When:  04-06-2026 16:10 – 04-06-2026 17:40");
-    expect(out).toContain("Meet:  15:50");
+    expect(out).toContain("When:    04-06-2026 16:10 – 04-06-2026 17:40");
+    expect(out).toContain("Meet:    15:50");
+    expect(out).toContain("Sign-up: pick_out");
     expect(out).toContain("Attending:     3  (2 players, 1 coaches)");
     expect(out).toContain("Not attending: 1");
     expect(out).toContain("Waiting list:  2");

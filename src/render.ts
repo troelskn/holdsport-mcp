@@ -336,11 +336,14 @@ export function renderActivity(
     : cell(a.time);
   const lines = [
     `# ${a.name || "(unnamed)"}${a.is_cancelled ? "  (CANCELLED)" : ""}`,
-    `When:  ${when}`,
+    `When:    ${when}`,
   ];
-  if (a.meeting_time) lines.push(`Meet:  ${a.meeting_time}`);
-  lines.push(`Type:  ${a.event_type || "—"}`, `Place: ${a.place || "—"}`);
-  if (a.comment) lines.push(`Note:  ${a.comment.replace(/\s+/g, " ").trim()}`);
+  if (a.meeting_time) lines.push(`Meet:    ${a.meeting_time}`);
+  lines.push(`Type:    ${a.event_type || "—"}`, `Place:   ${a.place || "—"}`);
+  if (a.registration_type)
+    lines.push(`Sign-up: ${a.registration_type}`);
+  if (a.comment)
+    lines.push(`Note:    ${a.comment.replace(/\s+/g, " ").trim()}`);
 
   lines.push(
     "",
